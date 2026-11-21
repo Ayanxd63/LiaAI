@@ -257,24 +257,33 @@ object VoiceSessionManager {
         client?.connect(apiKey, prompt, voiceName)
     }
 
+    /**
+     * Auto-reconnect delays between attempts: 2s, 5s, 10s (3 attempts).
+     * The old code retried 5 times every 1.2s, so a short server overload
+     * burned through all attempts in ~6s and gave up with "Connection lost".
+     * Growing delays give a transient overload time to clear before we ask
+     * the user to reopen Voice Mode by hand.
+     */
+    private val RECONNECT_DELAYS_MS = longArrayOf(2_000L, 5_000L, 10_000L)
+
     private fun scheduleReconnect() {
         if (!_isActive.value) return
         if (reconnectJob?.isActive == true) return
 
-        val count = VoiceLatencyTracker.reconnectCount.value
-        if (count >= 5) {
+        val attempt = VoiceLatencyTracker.reconnectCount.value
+        if (attempt >= RECONNECT_DELAYS_MS.size) {
             _state.value = NovaOrbState.ERROR
             _statusText.value = "Connection lost - tap Stop and reopen Voice Mode"
-            _lastError.value = "Connection lost after 5 attempts"
+            _lastError.value = "Connection lost after ${RECONNECT_DELAYS_MS.size} attempts"
             return
         }
 
         VoiceLatencyTracker.incrementReconnect()
         _state.value = NovaOrbState.CONNECTING
-        _statusText.value = "Reconnecting (attempt ${count + 1}/5)..."
+        _statusText.value = "Reconnecting (attempt ${attempt + 1}/${RECONNECT_DELAYS_MS.size})..."
 
         reconnectJob = scope.launch {
-            delay(1200)
+            delay(RECONNECT_DELAYS_MS[attempt])
             sessionMutex.withLock {
                 if (_isActive.value) {
                     connectSession(isResuming = true)
