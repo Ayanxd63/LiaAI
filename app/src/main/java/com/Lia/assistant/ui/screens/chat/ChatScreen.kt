@@ -46,6 +46,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.Lia.assistant.action.DeviceActions
+import com.Lia.assistant.action.DeviceCommandParser
 import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.forge.ForgeController
@@ -134,6 +136,25 @@ fun ChatScreen(
             )
             ForgeController.start(context, forgePrompt)
             navController.navigate("forge")
+            return
+        }
+
+        // Device command? Execute it LOCALLY on the phone instead of
+        // sending it to Gemini — works even on a very slow network.
+        val deviceCommand = DeviceCommandParser.parse(trimmed)
+        if (deviceCommand != null) {
+            isTyping = true
+            scope.launch(Dispatchers.IO) {
+                val reply = try {
+                    DeviceActions.execute(context, deviceCommand)
+                } catch (_: Exception) {
+                    "Ye kaam nahi ho saka — dobara try karo."
+                }
+                withContext(Dispatchers.Main) {
+                    isTyping = false
+                    messages.add(ChatMessage(text = reply, isUser = false))
+                }
+            }
             return
         }
 
