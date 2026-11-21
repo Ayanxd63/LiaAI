@@ -91,6 +91,8 @@ fun ChatScreen(
 
     var inputText by remember { mutableStateOf("") }
     var isTyping by remember { mutableStateOf(false) }
+    // Shown under the header while a reply is being retried after overload.
+    var retryNote by remember { mutableStateOf<String?>(null) }
 
     // TTS lifecycle
     var tts: TextToSpeech? by remember { mutableStateOf(null) }
@@ -137,6 +139,7 @@ fun ChatScreen(
 
         // Call Gemini
         isTyping = true
+        retryNote = null
         scope.launch(Dispatchers.IO) {
             val apiKey = ApiKeyStore.getKey(context)
             val systemInstruction = ChatPromptBuilder.build(
@@ -146,10 +149,21 @@ fun ChatScreen(
             )
 
             val history = messages.map { ChatTurn(isUser = it.isUser, text = it.text) }
-            val result = GeminiTextClient.reply(apiKey, systemInstruction, history)
+            val result = GeminiTextClient.reply(
+                apiKey,
+                systemInstruction,
+                history,
+                onRetrying = { attempt ->
+                    // reply() runs on IO; hop to Main to update Compose state.
+                    scope.launch {
+                        retryNote = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
+                    }
+                }
+            )
 
             withContext(Dispatchers.Main) {
                 isTyping = false
+                retryNote = null
                 when (result) {
                     is ChatReplyResult.Success -> {
                         // Word-by-word reveal (20ms per word)
@@ -236,7 +250,7 @@ fun ChatScreen(
                     color = colors.textPrimary
                 )
                 Text(
-                    text = if (isTyping) "Typing..." else "Here to help",
+                    text = retryNote ?: if (isTyping) "Typing..." else "Here to help",
                     fontSize = 12.sp,
                     color = colors.textSecondary
                 )
