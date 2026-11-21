@@ -117,7 +117,10 @@ object VoiceSessionManager {
         val personality = PersonalityRepository.getPersonality(currentContext)
         val language = PersonalityRepository.getLanguage(currentContext)
         val assistantName = PersonalityRepository.getAssistantName(currentContext)
-        val voiceName = PersonalityRepository.getVoiceName(currentContext)
+        // A personality may bring its own voice (e.g. Girlfriend uses Sulafat,
+        // the warmest Live voice); otherwise use the user's voice setting.
+        val voiceName = personality.voiceName
+            ?: PersonalityRepository.getVoiceName(currentContext)
 
         _currentPersonality.value = personality
         _currentLanguage.value = language

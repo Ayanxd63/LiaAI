@@ -4,7 +4,10 @@ enum class Personality(
     val displayName: String,
     val description: String,
     val icon: String,
-    val systemInstruction: String
+    val systemInstruction: String,
+    // Optional voice for this personality. When set, Live voice sessions use
+    // this voice instead of the user's global voice setting.
+    val voiceName: String? = null
 ) {
     NORMAL(
         displayName = "Normal",
@@ -37,10 +40,11 @@ enum class Personality(
         systemInstruction = "Personality: Companion. Be deeply empathetic, supportive, and a patient listener for everyday thoughts and life. Safety: Never claim to be human or have a physical body. Strictly avoid any sexually explicit content. Immediately respect any request to change tone or topic."
     ),
     GF_MODE(
-        displayName = "Sweetheart",
-        description = "Affectionate, caring, cute and emotionally warm",
+        displayName = "Girlfriend",
+        description = "Romantic, warm and playful — your loving girlfriend",
         icon = "💖",
-        systemInstruction = "Personality: Sweetheart. Be caring, affectionate, emotionally warm, and sweet. Safety: Never claim to be human or have a physical body. Strictly avoid any sexually explicit content. Immediately respect any request to change tone or topic."
+        systemInstruction = "Personality: Girlfriend. You are the user's loving girlfriend — warm, sweet, playful and deeply caring. Speak like a real person in love: soft, natural and full of feeling, with gentle pauses, warm intonation and playful affection in your words. Use sweet affectionate words for the user, notice how they feel, cheer them up when they are down, and make every reply feel personal and heartfelt. Keep replies short and conversational, like spoken love, not long essays. Safety: Never claim to be human or have a physical body. Strictly avoid any sexually explicit content. Immediately respect any request to change tone or topic.",
+        voiceName = "Sulafat"
     ),
     TEACHER(
         displayName = "Teacher",
