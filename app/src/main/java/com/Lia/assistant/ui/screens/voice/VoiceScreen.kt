@@ -128,7 +128,14 @@ fun VoiceScreen(
                         .size(44.dp)
                         .clip(CircleShape)
                         .background(colors.surfaceGlass)
-                        .clickable { navController.popBackStack() },
+                        .clickable {
+                            // Leaving voice mode must fully stop the session:
+                            // closing the screen without stopping kept the mic
+                            // open in the background (WhatsApp voice notes
+                            // then recorded empty/silent).
+                            VoiceForegroundService.stop(context)
+                            navController.popBackStack()
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -269,13 +276,17 @@ fun VoiceScreen(
                     )
                 }
 
-                // Close / dismiss button
+                // Close / dismiss button (also fully stops the voice session,
+                // same as Stop — otherwise the mic keeps running behind).
                 Box(
                     modifier = Modifier
                         .size(52.dp)
                         .clip(CircleShape)
                         .background(colors.surfaceRaised)
-                        .clickable { navController.popBackStack() },
+                        .clickable {
+                            VoiceForegroundService.stop(context)
+                            navController.popBackStack()
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(

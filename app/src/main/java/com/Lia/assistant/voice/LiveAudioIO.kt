@@ -1,14 +1,19 @@
 package com.Lia.assistant.voice
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
+import android.util.Log
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 import kotlin.math.min
@@ -16,9 +21,11 @@ import kotlin.math.sqrt
 
 class LiveAudioIO(
     private val onMicChunk: (ByteArray) -> Unit,
-    private val onMicAmplitude: (Float) -> Unit
+    private val onMicAmplitude: (Float) -> Unit,
+    private val context: Context? = null
 ) {
     companion object {
+        private const val TAG = "LiveAudioIO"
         const val MIC_SAMPLE_RATE = 16000
         const val SPEAKER_SAMPLE_RATE = 24000
         const val MIC_CHUNK_SIZE = 2048
@@ -50,10 +57,58 @@ class LiveAudioIO(
     private val lock = Any()
     private var currentVolume = 1.0f
 
+    // Audio focus: held only while the mic is open, and abandoned on release
+    // so other apps (e.g. WhatsApp voice notes) get the mic back cleanly.
+    private var audioManager: AudioManager? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
+
+    private fun requestAudioFocus() {
+        val ctx = context ?: return
+        try {
+            val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audioManager = am
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val attributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(attributes)
+                    .build()
+                audioFocusRequest = request
+                am.requestAudioFocus(request)
+            } else {
+                @Suppress("DEPRECATION")
+                am.requestAudioFocus(
+                    null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+                )
+            }
+        } catch (_: Exception) {
+            // Focus is best-effort; recording still works without it.
+        }
+    }
+
+    private fun abandonAudioFocus() {
+        try {
+            val am = audioManager ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+            } else {
+                @Suppress("DEPRECATION")
+                am.abandonAudioFocus(null)
+            }
+        } catch (_: Exception) {
+        } finally {
+            audioFocusRequest = null
+            audioManager = null
+        }
+    }
+
     @SuppressLint("MissingPermission")
     fun startRecording() {
         if (isRecording.get()) return
 
+        requestAudioFocus()
         val minBuf = AudioRecord.getMinBufferSize(
             MIC_SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
@@ -115,6 +170,9 @@ class LiveAudioIO(
     fun stopRecording() {
         isRecording.set(false)
         recordThread?.interrupt()
+        // The record thread may be blocked inside AudioRecord.read(); wait
+        // briefly so it exits before we release the recorder underneath it.
+        try { recordThread?.join(500) } catch (_: Exception) {}
         recordThread = null
         try {
             audioRecord?.stop()
@@ -128,6 +186,7 @@ class LiveAudioIO(
         echoCanceler = null
         noiseSuppressor = null
         gainControl = null
+        Log.d(TAG, "Mic stopped: AudioRecord released")
     }
 
     private fun getOrCreateSpeaker(): AudioTrack {
@@ -195,6 +254,7 @@ class LiveAudioIO(
 
     fun release() {
         stopRecording()
+        abandonAudioFocus()
         synchronized(lock) {
             audioTrack?.let { track ->
                 try {
@@ -204,5 +264,6 @@ class LiveAudioIO(
             }
             audioTrack = null
         }
+        Log.d(TAG, "Mic released: AudioRecord stopped, audio focus abandoned — other apps can use the mic now")
     }
 }

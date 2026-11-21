@@ -1,7 +1,11 @@
 package com.Lia.assistant.voice
 
 import android.content.Context
+import android.util.Log
 import com.Lia.assistant.action.ActionExecutor
+import com.Lia.assistant.action.DeviceActions
+import com.Lia.assistant.action.DeviceCommand
+import com.Lia.assistant.action.DeviceCommandParser
 import com.Lia.assistant.action.InstalledAppLabelCache
 import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.LanguagePreference
@@ -22,6 +26,8 @@ import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicLong
 
 object VoiceSessionManager {
+    private const val TAG = "VoiceSessionManager"
+
     private val scope = CoroutineScope(Dispatchers.IO)
     private val sessionMutex = Mutex()
     private val sessionEpoch = AtomicLong(0)
@@ -64,6 +70,31 @@ object VoiceSessionManager {
     private var silenceWatchdogJob: Job? = null
     private var isTurnActive = false
 
+    /**
+     * Last device command executed locally from a voice transcript, with the
+     * time it ran. Gemini hears the same words and may also try its own
+     * open_app/call_contact tool for them — this guard stops the same action
+     * running twice.
+     */
+    private var lastLocalActionSignature: String? = null
+    private var lastLocalActionAtMs: Long = 0L
+
+    private fun localActionSignature(command: DeviceCommand): String? = when (command) {
+        is DeviceCommand.OpenApp -> "open_app:${command.appName.lowercase()}"
+        is DeviceCommand.Dial -> "call_contact:${command.target.lowercase()}"
+        else -> null
+    }
+
+    private fun wasHandledLocallyRecently(toolName: String, args: JSONObject): Boolean {
+        val signature = lastLocalActionSignature ?: return false
+        if (System.currentTimeMillis() - lastLocalActionAtMs > 20_000L) return false
+        return when (toolName) {
+            "open_app" -> signature == "open_app:${args.optString("app_name", "").lowercase()}"
+            "call_contact" -> signature == "call_contact:${args.optString("contact_name", "").lowercase()}"
+            else -> false
+        }
+    }
+
     fun start(context: Context) {
         if (_isActive.value) return
         appContext = context.applicationContext
@@ -88,7 +119,8 @@ object VoiceSessionManager {
                     _amplitude.value = amp
                     _vadActive.value = amp > 0.05f
                 }
-            }
+            },
+            context = context.applicationContext
         )
 
         scope.launch {
@@ -179,6 +211,26 @@ object VoiceSessionManager {
                 if (detected != "UNKNOWN") {
                     _detectedLanguage.value = detected
                 }
+
+                // Device command spoken in voice mode? Run it LOCALLY right
+                // away instead of waiting on Gemini over a slow network.
+                // Gemini hears the same words and replies conversationally;
+                // the guard in onToolCall stops its own open_app/call_contact
+                // from running the same action a second time.
+                DeviceCommandParser.parse(text)?.let { command ->
+                    scope.launch {
+                        try {
+                            val reply = DeviceActions.execute(currentContext, command)
+                            localActionSignature(command)?.let { signature ->
+                                lastLocalActionSignature = signature
+                                lastLocalActionAtMs = System.currentTimeMillis()
+                            }
+                            Log.d(TAG, "Local device action from voice: $command -> $reply")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Local device action failed: $command", e)
+                        }
+                    }
+                }
             }
 
             override fun onOutputTranscript(text: String) {
@@ -197,6 +249,19 @@ object VoiceSessionManager {
                     val resp = JSONObject().apply { put("result", "forge_started") }
                     client?.sendToolResponse(id, name, resp)
                     _state.value = NovaOrbState.LISTENING
+                    return
+                }
+
+                // Already executed locally from the voice transcript (see
+                // onInputTranscript)? Tell Gemini it is done, do not run twice.
+                if (wasHandledLocallyRecently(name, args)) {
+                    val resp = JSONObject().apply {
+                        put("result", "already_done_locally")
+                        put("status", "success")
+                    }
+                    client?.sendToolResponse(id, name, resp)
+                    _state.value = NovaOrbState.LISTENING
+                    _statusText.value = "Listening..."
                     return
                 }
 
@@ -258,13 +323,13 @@ object VoiceSessionManager {
     }
 
     /**
-     * Auto-reconnect delays between attempts: 2s, 5s, 10s (3 attempts).
-     * The old code retried 5 times every 1.2s, so a short server overload
-     * burned through all attempts in ~6s and gave up with "Connection lost".
-     * Growing delays give a transient overload time to clear before we ask
-     * the user to reopen Voice Mode by hand.
+     * Auto-reconnect delays between attempts: 2s, 5s, 10s, 20s, 30s (5 attempts).
+     * The user's network is often only 3-20 K/s, so the Live voice session
+     * drops a lot. The old 3-attempt schedule gave up after ~17s; five
+     * attempts with growing delays cover ~65s and give a slow connection
+     * time to recover before we ask the user to use text chat instead.
      */
-    private val RECONNECT_DELAYS_MS = longArrayOf(2_000L, 5_000L, 10_000L)
+    private val RECONNECT_DELAYS_MS = longArrayOf(2_000L, 5_000L, 10_000L, 20_000L, 30_000L)
 
     private fun scheduleReconnect() {
         if (!_isActive.value) return
@@ -273,14 +338,16 @@ object VoiceSessionManager {
         val attempt = VoiceLatencyTracker.reconnectCount.value
         if (attempt >= RECONNECT_DELAYS_MS.size) {
             _state.value = NovaOrbState.ERROR
-            _statusText.value = "Connection lost - tap Stop and reopen Voice Mode"
+            _statusText.value = "Net bohat slow hai, voice connect nahi ho rahi. " +
+                "Text chat mein likh lo — wahan se bhi baat ho jayegi."
             _lastError.value = "Connection lost after ${RECONNECT_DELAYS_MS.size} attempts"
             return
         }
 
         VoiceLatencyTracker.incrementReconnect()
         _state.value = NovaOrbState.CONNECTING
-        _statusText.value = "Reconnecting (attempt ${attempt + 1}/${RECONNECT_DELAYS_MS.size})..."
+        _statusText.value = "Net slow hai, dobara connect kar rahi hun… " +
+            "(koshish ${attempt + 1}/${RECONNECT_DELAYS_MS.size})"
 
         reconnectJob = scope.launch {
             delay(RECONNECT_DELAYS_MS[attempt])
@@ -321,8 +388,12 @@ object VoiceSessionManager {
         client?.disconnect()
         client = null
 
+        // Full mic release: AudioRecord stopped, audio focus abandoned.
+        // Nothing keeps capturing in the background, so other apps
+        // (e.g. WhatsApp voice notes) get a working mic again.
         audioIO?.release()
         audioIO = null
+        Log.d(TAG, "Voice stopped: mic released, audio focus abandoned")
 
         EchoGuard.reset()
         ConversationMemory.clear()
