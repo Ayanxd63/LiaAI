@@ -34,6 +34,7 @@ object DeviceActions {
             is DeviceCommand.OpenSettings -> openSettings(context, command.screen)
             is DeviceCommand.SetAlarm -> setAlarm(context, command)
             is DeviceCommand.Dial -> dial(context, command.target)
+            is DeviceCommand.WhatsAppMessage -> whatsAppMessage(context, command)
             is DeviceCommand.Flashlight -> setFlashlight(context, command.on)
             DeviceCommand.VolumeUp -> adjustVolume(context, AudioManager.ADJUST_RAISE, "barha")
             DeviceCommand.VolumeDown -> adjustVolume(context, AudioManager.ADJUST_LOWER, "kam")
@@ -56,6 +57,8 @@ object DeviceActions {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
+            AppContext.record("youtube")
+            AppContext.markExternalLaunch()
             "YouTube par \"$query\" search kar diya hai."
         } catch (_: Exception) {
             // Last resort: plain browser view of the same search page.
@@ -64,6 +67,8 @@ object DeviceActions {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(fallback)
+                AppContext.record("youtube")
+                AppContext.markExternalLaunch()
                 "YouTube par \"$query\" search kar diya hai."
             } catch (_: Exception) {
                 "YouTube nahi khul saka — dobara try karo."
@@ -105,6 +110,8 @@ object DeviceActions {
         if (aliasPackages != null) {
             for (pkg in aliasPackages) {
                 if (AppLauncher.launch(context, pkg)) {
+                    if (key == "whatsapp" || key == "youtube") AppContext.record(key)
+                    AppContext.markExternalLaunch()
                     return "$displayName khol diya hai."
                 }
             }
@@ -114,6 +121,7 @@ object DeviceActions {
         val apps = InstalledAppLabelCache.get(context)
         val packageName = AppLauncher.findApp(key, apps)
         if (packageName != null && AppLauncher.launch(context, packageName)) {
+            AppContext.markExternalLaunch()
             return "$displayName khol diya hai."
         }
         return "\"$appName\" naam ki app nahi mili — naam dobara check kar ke batao."
@@ -136,6 +144,7 @@ object DeviceActions {
         return try {
             val intent = Intent(action).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
             context.startActivity(intent)
+            AppContext.markExternalLaunch()
             if (screen == SettingsScreen.DATE_TIME) {
                 "Date & time settings khol di hain. Time khud se change nahi kar sakti — " +
                     "Android iski ijazat nahi deta. Yahan se time khud set kar lo."
@@ -173,6 +182,7 @@ object DeviceActions {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
+            AppContext.markExternalLaunch()
             if (command.hasTime) {
                 "${formatAlarmTime(command.hour, command.minute)} ka alarm laga diya hai."
             } else {
@@ -210,6 +220,7 @@ object DeviceActions {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     context.startActivity(intent)
+                    AppContext.markExternalLaunch()
                     "Dialer khol diya hai — ${lookup.displayName} ko call karne ke liye green button dabao."
                 } catch (_: Exception) {
                     "Dialer nahi khul saka — dobara try karo."
@@ -222,6 +233,79 @@ object DeviceActions {
             is ContactLookupResult.NotFound -> {
                 "\"$target\" naam ka contact nahi mila — number bol do ya naam dobara batao."
             }
+        }
+    }
+
+    // ---------------------------------------------------------------- WhatsApp
+
+    /**
+     * WhatsApp message/chat. What is REAL:
+     * - A phone number opens that exact chat via wa.me/<number>.
+     * - A name or a group can NOT be opened directly — WhatsApp exposes no
+     *   intent for it. Lia only opens WhatsApp itself and says honestly
+     *   that he should tap the chat/group himself. Never a fake success.
+     * Lia only OPENS the chat — she never types or sends a message herself.
+     */
+    private fun whatsAppMessage(context: Context, command: DeviceCommand.WhatsAppMessage): String {
+        val target = command.target.trim()
+        AppContext.record("whatsapp")
+
+        val number = toWaMeNumber(target)
+        if (number != null) {
+            val url = "https://wa.me/$number"
+            return try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                    setPackage("com.whatsapp")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                AppContext.markExternalLaunch()
+                "WhatsApp par chat khol diya hai — message khud likh kar bhej do."
+            } catch (_: Exception) {
+                try {
+                    val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(fallback)
+                    AppContext.markExternalLaunch()
+                    "WhatsApp par chat khol diya hai — message khud likh kar bhej do."
+                } catch (_: Exception) {
+                    "WhatsApp nahi khul saka — dobara try karo."
+                }
+            }
+        }
+
+        // Name or group: open WhatsApp itself, be honest about the limit.
+        return if (AppLauncher.launch(context, "com.whatsapp")) {
+            AppContext.markExternalLaunch()
+            if (command.isGroup) {
+                "WhatsApp khol diya hai — '$target' group par khud tap kar lo, " +
+                    "main kisi group ko direct nahi khol sakti, WhatsApp iski ijazat nahi deta."
+            } else {
+                "WhatsApp khol diya hai — '$target' ka number mere paas nahi hai, " +
+                    "is liye chat direct nahi khol sakti. Number bol do to chat khol dungi, " +
+                    "ya yahan se khud tap kar lo."
+            }
+        } else {
+            "WhatsApp install nahi hai — pehle Play Store se install kar lo."
+        }
+    }
+
+    /**
+     * Converts a spoken number to wa.me format (international, no '+').
+     * Pakistani mobiles: 03XX-XXXXXXX -> 92XXXXXXXXXX. Returns null when
+     * the target is not a phone number at all.
+     */
+    private fun toWaMeNumber(target: String): String? {
+        val digits = target.replace(Regex("[^0-9]"), "")
+        if (digits.length < 10 || digits.length > 15) return null
+        if (!target.matches(Regex("^[+0-9][0-9\\s\\-()]*$"))) return null
+        return when {
+            digits.startsWith("92") && digits.length == 12 -> digits
+            digits.startsWith("0") && digits.length == 11 -> "92" + digits.substring(1)
+            digits.length == 10 -> "92$digits"
+            digits.startsWith("92") -> digits
+            else -> digits
         }
     }
 
