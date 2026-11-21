@@ -42,7 +42,7 @@ object GeminiTextClient {
         try {
             internalHttpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    val fallback = "models/gemini-2.0-flash"
+                    val fallback = "models/gemini-3.8-flash"
                     cachedResolvedModel = fallback
                     return fallback
                 }
@@ -77,11 +77,11 @@ object GeminiTextClient {
                             !lowerName.contains("tts") &&
                             !lowerName.contains("native-audio")
                         ) {
-                            // Prefer gemini-2.0 or newer over older models
+                            // Prefer the newest Flash generation first.
+                            // gemini-2.5-flash is no longer available to new
+                            // API users, so it must never win over a 3.x model.
                             if (flashCandidate == null ||
-                                (lowerName.contains("2.0") || lowerName.contains("2.5")) &&
-                                !flashCandidate!!.lowercase().contains("2.0") &&
-                                !flashCandidate!!.lowercase().contains("2.5")
+                                flashScore(lowerName) > flashScore(flashCandidate!!.lowercase())
                             ) {
                                 flashCandidate = name
                             }
@@ -89,15 +89,28 @@ object GeminiTextClient {
                     }
                 }
 
-                val chosen = flashCandidate ?: anyGenerateCandidate ?: "models/gemini-2.0-flash"
+                val chosen = flashCandidate ?: anyGenerateCandidate ?: "models/gemini-3.8-flash"
                 cachedResolvedModel = chosen
                 return chosen
             }
         } catch (_: Exception) {
-            val fallback = "models/gemini-2.0-flash"
+            val fallback = "models/gemini-3.8-flash"
             cachedResolvedModel = fallback
             return fallback
         }
+    }
+
+    /**
+     * Rank Flash models by generation so the newest available one wins:
+     * gemini-3.8-flash (100) > other gemini-3.x (90) > gemini-2.5 (50) >
+     * gemini-2.0 (40) > any other flash model (10).
+     */
+    private fun flashScore(lowerName: String): Int = when {
+        lowerName.contains("3.8") -> 100
+        lowerName.contains("3.") -> 90
+        lowerName.contains("2.5") -> 50
+        lowerName.contains("2.0") -> 40
+        else -> 10
     }
 
     fun reply(
@@ -114,7 +127,7 @@ object GeminiTextClient {
 
         val modelName = runCatching {
             kotlinx.coroutines.runBlocking { resolveModel(apiKey) }
-        }.getOrDefault("models/gemini-2.0-flash")
+        }.getOrDefault("models/gemini-3.8-flash")
 
         val modelEndpoint = if (modelName.startsWith("models/")) modelName else "models/$modelName"
         val url = "https://generativelanguage.googleapis.com/v1beta/$modelEndpoint:generateContent?key=$apiKey"
