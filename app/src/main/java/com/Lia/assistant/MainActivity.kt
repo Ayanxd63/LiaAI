@@ -22,6 +22,7 @@ import com.Lia.assistant.ui.screens.splash.LiaSplash3D
 import com.Lia.assistant.ui.screens.splash.SplashSession
 import com.Lia.assistant.ui.theme.NovaTheme
 import com.Lia.assistant.voice.VoiceForegroundService
+import com.Lia.assistant.voice.VoiceSessionManager
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -74,6 +75,17 @@ class MainActivity : ComponentActivity() {
             if (!isAllowed) {
                 VoiceForegroundService.stop(this@MainActivity)
             }
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // The app left the foreground (Home button, switched to WhatsApp,
+        // incoming call, screen locked): stop the voice session so the mic
+        // is fully released for the other app. Otherwise Lia keeps capturing
+        // in the background and WhatsApp voice notes record empty/silent.
+        if (VoiceSessionManager.isActive.value) {
+            VoiceForegroundService.stop(this)
         }
     }
 }
