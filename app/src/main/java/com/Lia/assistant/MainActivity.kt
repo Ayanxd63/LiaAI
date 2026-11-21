@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
+import com.Lia.assistant.action.AppContext
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.license.AccessKeyManager
@@ -23,11 +24,17 @@ import com.Lia.assistant.ui.screens.splash.SplashSession
 import com.Lia.assistant.ui.theme.NovaTheme
 import com.Lia.assistant.voice.VoiceForegroundService
 import com.Lia.assistant.voice.VoiceSessionManager
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var appState: NovaAppState
+
+    /** Delayed stop when Lia herself opened another app (see onStop). */
+    private var backgroundStopJob: Job? = null
+    private var isInForeground: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -70,6 +77,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        isInForeground = true
+        // Back in front: cancel any pending background stop.
+        backgroundStopJob?.cancel()
+        backgroundStopJob = null
         lifecycleScope.launch {
             val isAllowed = AccessKeyManager.liveCheck(this@MainActivity)
             if (!isAllowed) {
@@ -80,12 +91,34 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // The app left the foreground (Home button, switched to WhatsApp,
-        // incoming call, screen locked): stop the voice session so the mic
-        // is fully released for the other app. Otherwise Lia keeps capturing
-        // in the background and WhatsApp voice notes record empty/silent.
-        if (VoiceSessionManager.isActive.value) {
-            VoiceForegroundService.stop(this)
+        isInForeground = false
+        if (!VoiceSessionManager.isActive.value) return
+
+        // Lia herself just launched an external app (YouTube, WhatsApp,
+        // Settings...): the activity goes to background BECAUSE of her own
+        // action. Do NOT kill the voice session — it must stay alive in the
+        // foreground service so she can keep talking and listening while
+        // the other app is in front. Otherwise she goes completely silent
+        // the moment she opens another app (the v7 bug).
+        // Safety net: if there is no interaction for 60s in background,
+        // stop the session then, so the mic is still released eventually
+        // and other apps (e.g. WhatsApp voice notes) get it back.
+        if (AppContext.wasExternalLaunchRecent()) {
+            backgroundStopJob?.cancel()
+            backgroundStopJob = lifecycleScope.launch {
+                delay(AppContext.BACKGROUND_STAY_ALIVE_MS)
+                if (!isInForeground && VoiceSessionManager.isActive.value) {
+                    VoiceForegroundService.stop(this@MainActivity)
+                }
+            }
+            return
         }
+
+        // The user left the app himself (Home button, switched apps,
+        // incoming call, screen locked): stop the voice session right away
+        // so the mic is fully released for the other app. Otherwise Lia
+        // keeps capturing in the background and WhatsApp voice notes
+        // record empty/silent.
+        VoiceForegroundService.stop(this)
     }
 }

@@ -82,6 +82,7 @@ object VoiceSessionManager {
     private fun localActionSignature(command: DeviceCommand): String? = when (command) {
         is DeviceCommand.OpenApp -> "open_app:${command.appName.lowercase()}"
         is DeviceCommand.Dial -> "call_contact:${command.target.lowercase()}"
+        is DeviceCommand.WhatsAppMessage -> "message_contact:${command.target.lowercase()}"
         else -> null
     }
 
@@ -91,8 +92,27 @@ object VoiceSessionManager {
         return when (toolName) {
             "open_app" -> signature == "open_app:${args.optString("app_name", "").lowercase()}"
             "call_contact" -> signature == "call_contact:${args.optString("contact_name", "").lowercase()}"
+            "message_contact" -> signature == "message_contact:${args.optString("contact_name", "").lowercase()}"
             else -> false
         }
+    }
+
+    /**
+     * Makes Lia SPEAK a confirmation out loud after a local device action,
+     * in her own voice, through the live session. Without this she went
+     * completely silent after opening another app: the reply string was
+     * only logged, and MainActivity.onStop killed the session before
+     * Gemini could answer. The injected turn tells the model what was just
+     * done so it answers warmly and asks what's next.
+     */
+    private fun speakActionConfirmation(reply: String) {
+        val liveClient = client ?: return
+        if (!liveClient.isLive()) return
+        liveClient.sendText(
+            "System note — do not read this out literally: I just did this on " +
+                "the user's phone: $reply Tell him out loud in Roman Urdu, in one " +
+                "short warm sentence, what I did, and ask what he wants next."
+        )
     }
 
     fun start(context: Context) {
@@ -213,11 +233,13 @@ object VoiceSessionManager {
                 }
 
                 // Device command spoken in voice mode? Run it LOCALLY right
-                // away instead of waiting on Gemini over a slow network.
-                // Gemini hears the same words and replies conversationally;
-                // the guard in onToolCall stops its own open_app/call_contact
-                // from running the same action a second time.
-                DeviceCommandParser.parse(text)?.let { command ->
+                // away instead of waiting on Gemini over a slow network,
+                // then make Lia SPEAK the confirmation out loud — otherwise
+                // she goes silent after opening another app. Gemini hears
+                // the same words and replies conversationally; the guard in
+                // onToolCall stops its own open_app/call_contact/
+                // message_contact from running the same action a second time.
+                DeviceCommandParser.parse(text, AppContext.current())?.let { command ->
                     scope.launch {
                         try {
                             val reply = DeviceActions.execute(currentContext, command)
@@ -226,6 +248,7 @@ object VoiceSessionManager {
                                 lastLocalActionAtMs = System.currentTimeMillis()
                             }
                             Log.d(TAG, "Local device action from voice: $command -> $reply")
+                            speakActionConfirmation(reply)
                         } catch (e: Exception) {
                             Log.w(TAG, "Local device action failed: $command", e)
                         }

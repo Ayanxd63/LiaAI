@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.Lia.assistant.action.AppContext
 import com.Lia.assistant.action.DeviceActions
 import com.Lia.assistant.action.DeviceCommandParser
 import com.Lia.assistant.data.ApiKeyStore
@@ -141,7 +142,9 @@ fun ChatScreen(
 
         // Device command? Execute it LOCALLY on the phone instead of
         // sending it to Gemini — works even on a very slow network.
-        val deviceCommand = DeviceCommandParser.parse(trimmed)
+        // AppContext.current() is the app Lia opened last, so bare
+        // follow-ups like "song search karo" run in that app.
+        val deviceCommand = DeviceCommandParser.parse(trimmed, AppContext.current())
         if (deviceCommand != null) {
             isTyping = true
             scope.launch(Dispatchers.IO) {

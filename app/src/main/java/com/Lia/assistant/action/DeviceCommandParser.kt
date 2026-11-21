@@ -16,6 +16,15 @@ sealed interface DeviceCommand {
     data class OpenSettings(val screen: SettingsScreen) : DeviceCommand
     data class SetAlarm(val hour: Int, val minute: Int, val hasTime: Boolean) : DeviceCommand
     data class Dial(val target: String) : DeviceCommand
+
+    /**
+     * WhatsApp message/chat. [target] is a phone number (digits, may start
+     * with + or 0), a contact/group name, or empty when only a group was
+     * named. [isGroup] is true when the user asked for a group by name.
+     * WhatsApp exposes NO intent to open a specific group — for names and
+     * groups Lia only opens WhatsApp itself and says so honestly.
+     */
+    data class WhatsAppMessage(val target: String, val isGroup: Boolean = false) : DeviceCommand
     data class Flashlight(val on: Boolean) : DeviceCommand
     data object VolumeUp : DeviceCommand
     data object VolumeDown : DeviceCommand
@@ -34,16 +43,25 @@ object DeviceCommandParser {
         "gyarah" to 11, "barah" to 12
     )
 
-    fun parse(rawText: String): DeviceCommand? {
+    /**
+     * Parse a message. [lastApp] is the app Lia opened most recently in this
+     * session ("youtube" / "whatsapp", from [AppContext]) — it is only used
+     * for bare follow-ups like "song search karo" after YouTube was opened.
+     * Explicit single-step commands always win over context: the follow-up
+     * parser runs only after every explicit command parser has said no.
+     */
+    fun parse(rawText: String, lastApp: String? = null): DeviceCommand? {
         val text = normalize(rawText)
         if (text.isEmpty()) return null
 
         parseYouTubeSearch(text)?.let { return it }
+        parseWhatsAppMessage(text)?.let { return it }
         parseSettings(text)?.let { return it }
         parseAlarm(text)?.let { return it }
         parseCall(text)?.let { return it }
         parseFlashlight(text)?.let { return it }
         parseVolume(text)?.let { return it }
+        parseFollowUp(text, lastApp)?.let { return it }
         parseOpenApp(text)?.let { return it }
         return null
     }
@@ -76,6 +94,55 @@ object DeviceCommandParser {
             if (query.isNotEmpty()) return DeviceCommand.YouTubeSearch(query)
         }
         return null
+    }
+
+    // "03001234567 ko whatsapp karo" / "ali ko whatsapp message karo" /
+    // "ali ko message karo" / "school group kholo" / "mera school group kholo"
+    // NOTE: a group can never be opened directly — WhatsApp exposes no
+    // intent for it. The executor opens WhatsApp itself and says so honestly.
+    private fun parseWhatsAppMessage(text: String): DeviceCommand.WhatsAppMessage? {
+        // "... group kholo" — a group name, never a number.
+        val groupKholo = Regex(
+            "^(?:mera\\s+|my\\s+)?(.+?)\\s+group\\s+(?:kholo|khol\\s+do|open\\s+karo|open\\s+kar\\s+do)$"
+        ).find(text)
+        if (groupKholo != null) {
+            val name = groupKholo.groupValues[1].trim()
+            if (name.isNotEmpty() && name != "whatsapp") {
+                return DeviceCommand.WhatsAppMessage(name, isGroup = true)
+            }
+        }
+
+        val patterns = listOf(
+            Regex("^(.+?)\\s+ko\\s+(?:whatsapp|whatsap|watsapp)\\s+(?:message\\s+karo|msg\\s+karo|karo|kar\\s+do)$"),
+            Regex("^(.+?)\\s+ko\\s+(?:whatsapp\\s+)?(?:message|msg)\\s+(?:karo|kar\\s+do|bhejo|bhej\\s+do)$"),
+            Regex("^whatsapp\\s+(?:par|pe|mein|me|on)\\s+(.+?)\\s+ko\\s+(?:message|msg)\\s+(?:karo|kar\\s+do|bhejo|bhej\\s+do)$"),
+            Regex("^whatsapp\\s+(?:message|msg)\\s+(?:karo|kar\\s+do)\\s+(?:to\\s+)?(.+)$")
+        )
+        for (pattern in patterns) {
+            val match = pattern.find(text) ?: continue
+            val target = match.groupValues.last().trim()
+            if (target.isNotEmpty()) return DeviceCommand.WhatsAppMessage(target)
+        }
+        return null
+    }
+
+    /**
+     * Bare follow-ups that only make sense with the last app as context.
+     * Only YouTube follow-ups live here — WhatsApp follow-ups ("X ko message
+     * karo") are already handled by [parseWhatsAppMessage] with or without
+     * context. This runs AFTER every explicit command parser, so "alarm
+     * lagao" or "volume tez karo" are never mistaken for a YouTube search.
+     */
+    private fun parseFollowUp(text: String, lastApp: String?): DeviceCommand? {
+        if (lastApp != "youtube") return null
+        // "song search karo" / "atif aslam chalao" / "funny video dikhao" /
+        // "naat play karo" — the query is whatever comes before the verb.
+        val match = Regex(
+            "^(.+?)\\s+(search\\s+karo|search\\s+kar\\s+do|search|chalao|chala\\s+do|dikhao|dikha\\s+do|play\\s+karo|play\\s+kar|laga\\s+do|lagao)$"
+        ).find(text) ?: return null
+        val query = match.groupValues[1].trim()
+        if (query.isEmpty()) return null
+        return DeviceCommand.YouTubeSearch(query)
     }
 
     // "wifi settings kholo", "bluetooth settings kholo", "time change karo",

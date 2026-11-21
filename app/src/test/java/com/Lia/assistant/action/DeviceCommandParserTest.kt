@@ -155,6 +155,81 @@ class DeviceCommandParserTest {
         assertEquals(DeviceCommand.VolumeDown, DeviceCommandParser.parse("volume down karo"))
     }
 
+    // ------------------------------------------------------------ WhatsApp message
+
+    @Test
+    fun whatsAppMessageByNumber() {
+        assertEquals(
+            DeviceCommand.WhatsAppMessage("03001234567"),
+            DeviceCommandParser.parse("03001234567 ko whatsapp karo")
+        )
+        assertEquals(
+            DeviceCommand.WhatsAppMessage("ali"),
+            DeviceCommandParser.parse("ali ko whatsapp message karo")
+        )
+        assertEquals(
+            DeviceCommand.WhatsAppMessage("03001234567"),
+            DeviceCommandParser.parse("03001234567 ko message karo")
+        )
+    }
+
+    @Test
+    fun whatsAppGroupIsHonestCommand() {
+        // Groups can never be opened directly — the command records the
+        // group name so the executor opens WhatsApp and says so honestly.
+        assertEquals(
+            DeviceCommand.WhatsAppMessage("school", isGroup = true),
+            DeviceCommandParser.parse("mera school group kholo")
+        )
+        assertEquals(
+            DeviceCommand.WhatsAppMessage("school", isGroup = true),
+            DeviceCommandParser.parse("school group kholo")
+        )
+    }
+
+    // ------------------------------------------------------------ Two-step follow-ups
+
+    @Test
+    fun youtubeFollowUpWithContext() {
+        // Bare follow-ups only fire when YouTube was the last app opened.
+        assertEquals(
+            DeviceCommand.YouTubeSearch("atif aslam ke gaane"),
+            DeviceCommandParser.parse("atif aslam ke gaane chalao", "youtube")
+        )
+        assertEquals(
+            DeviceCommand.YouTubeSearch("song"),
+            DeviceCommandParser.parse("song search karo", "youtube")
+        )
+        assertEquals(
+            DeviceCommand.YouTubeSearch("naat"),
+            DeviceCommandParser.parse("naat dikhao", "youtube")
+        )
+        // Same words with NO context are not a command.
+        assertNull(DeviceCommandParser.parse("atif aslam ke gaane chalao"))
+        assertNull(DeviceCommandParser.parse("song search karo"))
+        // Context never hijacks explicit commands.
+        assertEquals(
+            DeviceCommand.SetAlarm(7, 0, true),
+            DeviceCommandParser.parse("subah 7 baje alarm lagao", "youtube")
+        )
+        assertEquals(
+            DeviceCommand.VolumeUp,
+            DeviceCommandParser.parse("volume tez karo", "youtube")
+        )
+    }
+
+    @Test
+    fun whatsAppFollowUpWithContext() {
+        assertEquals(
+            DeviceCommand.WhatsAppMessage("03001234567"),
+            DeviceCommandParser.parse("03001234567 ko message karo", "whatsapp")
+        )
+        assertEquals(
+            DeviceCommand.WhatsAppMessage("school", isGroup = true),
+            DeviceCommandParser.parse("school group kholo", "whatsapp")
+        )
+    }
+
     // ------------------------------------------------------------ Non-commands
 
     @Test
