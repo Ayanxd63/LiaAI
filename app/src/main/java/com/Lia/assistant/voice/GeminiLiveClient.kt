@@ -146,6 +146,34 @@ class GeminiLiveClient(private val listener: Listener) {
         ws.send(root.toString())
     }
 
+    /**
+     * Sends a text turn into the live session (BidiGenerateContent
+     * clientContent). Used to make Lia SPEAK a confirmation out loud after
+     * a local device action — e.g. after she opens YouTube, the model
+     * answers this turn in her own voice instead of going silent.
+     */
+    fun sendText(text: String) {
+        val ws = webSocket ?: return
+        if (!isConnected.get() || text.isBlank()) return
+
+        val root = JSONObject()
+        val clientContent = JSONObject()
+        val turns = JSONArray()
+        val turn = JSONObject()
+        turn.put("role", "user")
+        val parts = JSONArray()
+        val part = JSONObject()
+        part.put("text", text)
+        parts.put(part)
+        turn.put("parts", parts)
+        turns.put(turn)
+        clientContent.put("turns", turns)
+        clientContent.put("turnComplete", true)
+        root.put("clientContent", clientContent)
+
+        ws.send(root.toString())
+    }
+
     fun sendToolResponse(id: String, name: String, resultJson: JSONObject) {
         val ws = webSocket ?: return
         if (!isConnected.get()) return
