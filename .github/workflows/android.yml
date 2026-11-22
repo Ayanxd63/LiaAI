@@ -35,11 +35,14 @@ jobs:
       # — AGP tried to auto-install NDK 29.0.13113456 (pinned in
       # llama-lib/build.gradle.kts) but its licence was not accepted.
       # Accept all SDK licences, then install that exact NDK up front.
-      - name: Accept SDK licences and install NDK
+      # V15 fix 2: the rebuild then failed with [CXX1300] — CMake 3.31.6
+      # (pinned in llama-lib/build.gradle.kts) is not installed on the
+      # runner, so install it here too.
+      - name: Accept SDK licences and install NDK + CMake
         run: |
           SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses
-          "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "ndk;29.0.13113456"
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "ndk;29.0.13113456" "cmake;3.31.6"
 
       - name: Build directDebug APK
         run: ./gradlew assembleDirectDebug --stacktrace
