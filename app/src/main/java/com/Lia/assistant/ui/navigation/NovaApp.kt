@@ -51,8 +51,6 @@ import com.Lia.assistant.ui.screens.privacy.PrivacyScreen
 import com.Lia.assistant.ui.screens.profile.ProfileScreen
 import com.Lia.assistant.ui.screens.quickactions.QuickActionsScreen
 import com.Lia.assistant.ui.screens.settings.MemoryScreen
-import com.Lia.assistant.ui.screens.settings.OfflineModelScreen
-import com.Lia.assistant.ui.screens.settings.OnDeviceVoiceScreen
 import com.Lia.assistant.ui.screens.settings.SettingsScreen
 import com.Lia.assistant.ui.screens.voice.VoiceScreen
 import com.Lia.assistant.ui.screens.write.WriteScreen
@@ -152,9 +150,9 @@ fun NovaApp(appState: NovaAppState) {
                     composable("elevenlabs_settings") { ElevenLabsSettingsScreen(navController) }
                     composable("voice_settings") { VoiceSettingsScreen(navController) }
                     composable("voice_keyboard") { VoiceKeyboardSettingsScreen(navController) }
-                    // V15: offline AI model manager + long-term memory.
-                    composable("offline_model") { OfflineModelScreen(navController) }
-                    composable("on_device_voice") { OnDeviceVoiceScreen(navController) }
+                    // V15: long-term memory screen. (V18: the offline
+                    // model manager + on-device voice screens were
+                    // removed with the engines they served.)
                     composable("memory") { MemoryScreen(navController) }
                     // V16: setup wizard, voice picker + enrolment, skills,
                     // actions, sub-agents, backup, crash reports.
