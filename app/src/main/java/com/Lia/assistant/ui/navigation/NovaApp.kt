@@ -40,6 +40,8 @@ import com.Lia.assistant.ui.screens.personality.PersonalityScreen
 import com.Lia.assistant.ui.screens.privacy.PrivacyScreen
 import com.Lia.assistant.ui.screens.profile.ProfileScreen
 import com.Lia.assistant.ui.screens.quickactions.QuickActionsScreen
+import com.Lia.assistant.ui.screens.settings.MemoryScreen
+import com.Lia.assistant.ui.screens.settings.OfflineModelScreen
 import com.Lia.assistant.ui.screens.settings.SettingsScreen
 import com.Lia.assistant.ui.screens.voice.VoiceScreen
 import com.Lia.assistant.ui.screens.write.WriteScreen
@@ -130,6 +132,9 @@ fun NovaApp(appState: NovaAppState) {
                     composable("elevenlabs_settings") { ElevenLabsSettingsScreen(navController) }
                     composable("voice_settings") { VoiceSettingsScreen(navController) }
                     composable("voice_keyboard") { VoiceKeyboardSettingsScreen(navController) }
+                    // V15: offline AI model manager + long-term memory.
+                    composable("offline_model") { OfflineModelScreen(navController) }
+                    composable("memory") { MemoryScreen(navController) }
 
                     // Flavor-specific routes (e.g. accessibility disclosure in direct)
                     registerAccessibilityDisclosureRoute(navController)
