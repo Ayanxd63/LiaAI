@@ -43,10 +43,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
-import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.ui.components.NovaButton
-import com.Lia.assistant.ui.components.NovaButtonType
 import com.Lia.assistant.ui.components.NovaVoiceVisualizer
 import com.Lia.assistant.ui.fx.LiaOrb3D
 import com.Lia.assistant.ui.fx.ListeningEdgeGlow
@@ -94,12 +92,13 @@ fun VoiceScreen(
         }
     }
 
-    val hasKey = ApiKeyStore.hasKey(context)
-
-    LaunchedEffect(hasRecordAudioPermission, hasKey) {
+    // V12: voice works with no key at all (on-device recognition +
+    // Pollinations chat + system TTS). The only gate left is the mic
+    // permission; a saved Gemini key just switches to the Live path.
+    LaunchedEffect(hasRecordAudioPermission) {
         if (!hasRecordAudioPermission) {
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        } else if (hasKey && !VoiceSessionManager.isActive.value) {
+        } else if (!VoiceSessionManager.isActive.value) {
             VoiceForegroundService.start(context)
         }
     }
@@ -151,28 +150,7 @@ fun VoiceScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                if (!hasKey) {
-                    LiaOrb3D(
-                        state = NovaOrbState.ERROR,
-                        size = orbSize,
-                        amplitude = 0f,
-                        assistantName = appState.assistantName
-                    )
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Text(
-                        text = "API Key Required",
-                        fontFamily = SerifFontFamily,
-                        fontStyle = FontStyle.Italic,
-                        fontSize = 20.sp,
-                        color = colors.error
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    NovaButton(
-                        text = "Open Settings",
-                        onClick = { navController.navigate("settings") },
-                        type = NovaButtonType.PRIMARY
-                    )
-                } else if (!hasRecordAudioPermission) {
+                if (!hasRecordAudioPermission) {
                     LiaOrb3D(
                         state = NovaOrbState.ERROR,
                         size = orbSize,
