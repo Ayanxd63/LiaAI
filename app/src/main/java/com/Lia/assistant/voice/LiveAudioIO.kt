@@ -9,9 +9,6 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
-import android.media.audiofx.AcousticEchoCanceler
-import android.media.audiofx.AutomaticGainControl
-import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.util.Log
 import com.Lia.assistant.data.VoicePlaybackSettings
@@ -70,9 +67,10 @@ class LiveAudioIO(
     }
 
     private var audioRecord: AudioRecord? = null
-    private var echoCanceler: AcousticEchoCanceler? = null
-    private var noiseSuppressor: NoiseSuppressor? = null
-    private var gainControl: AutomaticGainControl? = null
+    // V16: the platform echo-cancellation session (AEC + noise
+    // suppressor + gain control) attached to the recorder's audio
+    // session — see PlatformEcho for the two-layer design.
+    private var echoSession: PlatformEcho.Session? = null
 
     private var audioTrack: AudioTrack? = null
     private val isRecording = AtomicBoolean(false)
@@ -157,23 +155,11 @@ class LiveAudioIO(
 
             val sessionId = record.audioSessionId
             if (sessionId != 0) {
-                try {
-                    if (AcousticEchoCanceler.isAvailable()) {
-                        echoCanceler = AcousticEchoCanceler.create(sessionId)?.apply { enabled = true }
-                    }
-                } catch (_: Exception) {}
-
-                try {
-                    if (NoiseSuppressor.isAvailable()) {
-                        noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply { enabled = true }
-                    }
-                } catch (_: Exception) {}
-
-                try {
-                    if (AutomaticGainControl.isAvailable()) {
-                        gainControl = AutomaticGainControl.create(sessionId)?.apply { enabled = true }
-                    }
-                } catch (_: Exception) {}
+                // V16: one call attaches AEC + noise suppressor + gain
+                // control (PlatformEcho). Best-effort — if the phone
+                // has no AEC, recording still works; EchoGuard's mute
+                // tail is the second layer.
+                echoSession = PlatformEcho.attach(sessionId)
             }
 
             record.startRecording()
@@ -210,12 +196,9 @@ class LiveAudioIO(
         } catch (_: Exception) {}
         audioRecord = null
 
-        try { echoCanceler?.release() } catch (_: Exception) {}
-        try { noiseSuppressor?.release() } catch (_: Exception) {}
-        try { gainControl?.release() } catch (_: Exception) {}
-        echoCanceler = null
-        noiseSuppressor = null
-        gainControl = null
+        try { echoSession?.release() } catch (_: Exception) {}
+        echoSession = null
+        PlatformEcho.onReleased()
         Log.d(TAG, "Mic stopped: AudioRecord released")
     }
 

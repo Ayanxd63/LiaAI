@@ -25,6 +25,8 @@ import androidx.navigation.NavController
 import com.Lia.assistant.ui.components.NovaGlassCard
 import com.Lia.assistant.ui.theme.LocalNovaColors
 import com.Lia.assistant.ui.theme.nightSky
+import com.Lia.assistant.voice.EchoGuard
+import com.Lia.assistant.voice.PlatformEcho
 import com.Lia.assistant.voice.VoiceLatencyTracker
 import com.Lia.assistant.voice.VoiceSessionManager
 
@@ -36,6 +38,8 @@ fun DebugScreen(
     val colors = LocalNovaColors.current
 
     val state by VoiceSessionManager.state.collectAsState()
+    val turnState by VoiceSessionManager.turnState.collectAsState()
+    val echoStatus by PlatformEcho.lastStatus.collectAsState()
     val personality by VoiceSessionManager.currentPersonality.collectAsState()
     val configuredLang by VoiceSessionManager.currentLanguage.collectAsState()
     val detectedLang by VoiceSessionManager.detectedLanguage.collectAsState()
@@ -73,6 +77,16 @@ fun DebugScreen(
         NovaGlassCard(modifier = Modifier.fillMaxWidth()) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 DebugRow("Live Connection State", state.name)
+                // V16 (APK-delta addition): the turn state (where the
+                // conversation turn is) and the two echo layers —
+                // platform AEC on Lia's own recorder, EchoGuard's mute
+                // tail where the system owns the mic.
+                DebugRow("Voice Turn", turnState.label)
+                DebugRow("Echo Cancellation (AEC)", echoStatus)
+                DebugRow(
+                    "EchoGuard Mic Mute",
+                    if (EchoGuard.isMicMuted()) "MUTED (playback tail)" else "off"
+                )
                 DebugRow("Active Personality", personality.displayName)
                 DebugRow("Configured Language", configuredLang.displayName)
                 DebugRow("Detected Spoken Language", detectedLang)

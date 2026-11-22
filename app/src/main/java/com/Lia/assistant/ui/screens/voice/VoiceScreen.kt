@@ -58,6 +58,7 @@ import com.Lia.assistant.ui.theme.nightSky
 import com.Lia.assistant.voice.NovaOrbState
 import com.Lia.assistant.voice.VoiceForegroundService
 import com.Lia.assistant.voice.VoiceSessionManager
+import com.Lia.assistant.voice.VoiceTurnState
 
 @Composable
 fun VoiceScreen(
@@ -75,6 +76,10 @@ fun VoiceScreen(
     // V16 (P0-4): the last error, so a timeout reads differently from
     // an API failure or an offline-engine failure.
     val lastError by VoiceSessionManager.lastError.collectAsState()
+    // V16 (APK-delta addition): the turn state — where exactly this
+    // conversation turn is (listening -> speech -> end-of-speech ->
+    // thinking -> speaking), shown as one small line under the orb.
+    val turnState by VoiceSessionManager.turnState.collectAsState()
 
     // V16 (P0-4): Back closes the OVERLAY (stops the session, back to
     // Home) — it never exits the app any more. This was the V11
@@ -232,6 +237,18 @@ fun VoiceScreen(
                                 onClick = {}
                             )
                         }
+                    }
+
+                    // V16 (APK-delta addition): the turn line — where
+                    // exactly this turn is. Hidden when idle so the
+                    // overlay stays quiet before a session starts.
+                    if (turnState != VoiceTurnState.IDLE) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Turn: ${turnState.label}",
+                            fontSize = 12.sp,
+                            color = colors.textSecondary
+                        )
                     }
 
                     // V16 (P0-4): timeout errors surface distinctly —

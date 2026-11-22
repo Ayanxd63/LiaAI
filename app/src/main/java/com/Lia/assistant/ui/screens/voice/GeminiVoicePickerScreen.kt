@@ -53,9 +53,10 @@ import com.Lia.assistant.voice.CuteVoice
  * uses (Aoede, Puck, Charon, Kore, Fenrir — the old Settings cycle —
  * plus Sulafat, the Girlfriend's Live voice). These are NAMES only:
  * the real Live voice is heard only in a Gemini voice chat, when a key
- * is saved. The preview here is always the device TTS voice — the
- * footnote says so plainly. No Live voice ID is invented: every name
- * listed already exists in the app's code.
+ * is saved. Every row still previews: the sample is spoken LIVE by
+ * the device TTS (never a bundled audio file) — the footnote says so
+ * plainly. No Live voice ID is invented: every name listed already
+ * exists in the app's code.
  */
 @Composable
 fun GeminiVoicePickerScreen(
@@ -102,7 +103,15 @@ fun GeminiVoicePickerScreen(
         }
     }
 
-    fun previewWithVoice(voice: Voice?) {
+    /**
+     * Speak the sample line live with the device TTS — never a bundled
+     * audio file (Maya ships 43 .ogg preview samples; Lia generates
+     * its preview live, so there is nothing to copy and nothing to
+     * ship). [voice] selects the device voice (null = Lia's cute
+     * auto voice); [tag] is the row's "Playing…" key, so each row
+     * tracks its own preview.
+     */
+    fun previewWithVoice(voice: Voice?, tag: String? = null) {
         val engine = tts ?: return
         if (!ttsReady) return
         try {
@@ -113,7 +122,7 @@ fun GeminiVoicePickerScreen(
             } else {
                 CuteVoice.applyCuteVoice(engine)
             }
-            previewingVoice = voice?.name ?: "auto"
+            previewingVoice = tag ?: voice?.name ?: "auto"
             engine.speak(
                 "Hello! Main Lia hun, tumhari apni dost.",
                 TextToSpeech.QUEUE_FLUSH,
@@ -259,6 +268,20 @@ fun GeminiVoicePickerScreen(
                                 color = colors.textSecondary
                             )
                         }
+                        // V16 (APK-delta addition): every row previews —
+                        // the sample is spoken LIVE by the device TTS
+                        // (never a bundled audio file). This is a sample
+                        // of the picker's style, NOT the Live voice
+                        // itself — the footnote above says so.
+                        Text(
+                            text = if (previewingVoice == "live-$voiceName") "Playing…" else "Preview",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.accent,
+                            modifier = Modifier
+                                .clickable { previewWithVoice(null, "live-$voiceName") }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
                         Text(
                             text = if (selected) "✓ Selected" else "Select",
                             fontSize = 13.sp,

@@ -17,6 +17,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,9 +30,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.Lia.assistant.action.ActionCatalogue
+import com.Lia.assistant.action.CatalogueAction
 import com.Lia.assistant.action.DeviceActions
-import com.Lia.assistant.action.DeviceCommand
-import com.Lia.assistant.action.SettingsScreen
 import com.Lia.assistant.ui.components.NovaButton
 import com.Lia.assistant.ui.components.NovaButtonType
 import com.Lia.assistant.ui.components.NovaGlassCard
@@ -49,20 +50,19 @@ import kotlinx.coroutines.withContext
  * Lia can actually do on this phone, taken from the real
  * [DeviceCommand] list — nothing invented, nothing faked.
  *
+ * V16 (APK-delta addition): the rows are DATA, not code — they come
+ * from `assets/lia_actions.json` via [ActionCatalogue]. Adding a new
+ * action is a JSON edit; the driver ([ActionCatalogue.toDeviceCommand])
+ * maps each catalogue `command` to its real constructor. If the file
+ * cannot be read, a tiny built-in fallback is shown and the screen
+ * says so plainly instead of going blank.
+ *
  * Every row is tappable: actions that need no input run at once and
  * show Lia's real reply; actions that need a name, query or number
  * ask for it first in a small dialog, then run. When something needs a
  * permission, the result says so plainly instead of pretending it
  * worked.
  */
-private data class ActionDef(
-    val name: String,
-    val example: String,
-    val needs: String? = null,
-    val inputHint: String? = null,
-    val build: (String) -> DeviceCommand
-)
-
 @Composable
 fun ActionsScreen(
     navController: NavController,
@@ -73,114 +73,31 @@ fun ActionsScreen(
     val scope = rememberCoroutineScope()
 
     var resultText by remember { mutableStateOf<String?>(null) }
-    var pendingAction by remember { mutableStateOf<ActionDef?>(null) }
+    var pendingAction by remember { mutableStateOf<CatalogueAction?>(null) }
     var pendingInput by remember { mutableStateOf("") }
 
-    fun runAction(action: ActionDef, input: String) {
+    // Catalogue loads once from assets (IO thread); until it arrives
+    // the screen shows a short loading line, never a blank page.
+    var catalogue by remember { mutableStateOf<ActionCatalogue.LoadResult?>(null) }
+    LaunchedEffect(Unit) {
+        catalogue = withContext(Dispatchers.IO) { ActionCatalogue.load(context) }
+    }
+
+    fun runAction(action: CatalogueAction, input: String) {
         scope.launch(Dispatchers.IO) {
-            val reply = try {
-                DeviceActions.execute(context, action.build(input))
-            } catch (_: Exception) {
-                "Ye kaam nahi ho saka — dobara try karo."
+            val command = ActionCatalogue.toDeviceCommand(action, input)
+            val reply = if (command == null) {
+                "Ye action is version mein nahi hai."
+            } else {
+                try {
+                    DeviceActions.execute(context, command)
+                } catch (_: Exception) {
+                    "Ye kaam nahi ho saka — dobara try karo."
+                }
             }
             withContext(Dispatchers.Main) { resultText = reply }
         }
     }
-
-    val searchAndOpen = listOf(
-        ActionDef(
-            "YouTube search", "\"YouTube par music search karo\"",
-            inputHint = "Kya search karun? (e.g. music)"
-        ) { DeviceCommand.YouTubeSearch(it.ifBlank { "music" }) },
-        ActionDef(
-            "Open app", "\"YouTube kholo\"",
-            inputHint = "Konsi app? (e.g. YouTube)"
-        ) { DeviceCommand.OpenApp(it.ifBlank { "YouTube" }) }
-    )
-    val callsAndMessages = listOf(
-        ActionDef(
-            "Dial a contact", "\"Ammi ko dial karo\"",
-            needs = "Contacts permission (naam ke liye)",
-            inputHint = "Naam ya number"
-        ) { DeviceCommand.Dial(it) },
-        ActionDef(
-            "Direct call", "\"Ammi ko call karo\"",
-            needs = "Call permission — warna dialer khulega",
-            inputHint = "Naam ya number"
-        ) { DeviceCommand.DirectCall(it) },
-        ActionDef(
-            "WhatsApp chat", "\"WhatsApp par Ammi ko message karo\"",
-            needs = "Number ho to direct chat, naam ho to WhatsApp khulega",
-            inputHint = "Number ya naam"
-        ) { DeviceCommand.WhatsAppMessage(it) }
-    )
-    val phoneControls = listOf(
-        ActionDef("Flashlight on", "\"Flashlight on karo\"", needs = "Camera permission") {
-            DeviceCommand.Flashlight(true)
-        },
-        ActionDef("Flashlight off", "\"Flashlight band karo\"") {
-            DeviceCommand.Flashlight(false)
-        },
-        ActionDef("Volume up", "\"Volume barhao\"") { DeviceCommand.VolumeUp },
-        ActionDef("Volume down", "\"Volume kam karo\"") { DeviceCommand.VolumeDown },
-        ActionDef(
-            "Brightness", "\"Brightness 70% karo\"",
-            needs = "Modify system settings",
-            inputHint = "Kitni %? (0–100)"
-        ) {
-            val level = it.trim().toIntOrNull()
-            DeviceCommand.Brightness(level = level)
-        },
-        ActionDef("Do Not Disturb on", "\"DND on karo\"", needs = "DND access") {
-            DeviceCommand.DoNotDisturb(true)
-        },
-        ActionDef("Do Not Disturb off", "\"DND band karo\"", needs = "DND access") {
-            DeviceCommand.DoNotDisturb(false)
-        },
-        ActionDef("Internet panel", "\"WiFi on karo\"", needs = "Android khud on/off nahi karne deta — panel khulta hai") {
-            DeviceCommand.InternetPanel
-        },
-        ActionDef("Bluetooth on", "\"Bluetooth on karo\"", needs = "Bluetooth permission — Allow dabana hoga") {
-            DeviceCommand.BluetoothToggle(true)
-        },
-        ActionDef("Set alarm", "\"Subah 7:30 ka alarm lagao\"", inputHint = "Time (e.g. 7:30)") {
-            val parts = it.trim().split(":")
-            val hour = parts.getOrNull(0)?.toIntOrNull()
-            val minute = parts.getOrNull(1)?.toIntOrNull() ?: 0
-            if (hour != null) DeviceCommand.SetAlarm(hour, minute, true)
-            else DeviceCommand.SetAlarm(0, 0, false)
-        }
-    )
-    val notificationsAndUsage = listOf(
-        ActionDef(
-            "Read notifications", "\"Mere notifications parho\"",
-            needs = "Notification access"
-        ) { DeviceCommand.ReadNotifications },
-        ActionDef(
-            "Reply to notification", "\"WhatsApp ko reply karo\"",
-            needs = "Notification access",
-            inputHint = "Reply message"
-        ) { DeviceCommand.ReplyNotification(null, it) },
-        ActionDef(
-            "Current app", "\"Konsi app khuli hai?\"",
-            needs = "Usage access"
-        ) { DeviceCommand.CurrentApp },
-        ActionDef(
-            "Top apps today", "\"Aaj konsi apps zyada chali?\"",
-            needs = "Usage access"
-        ) { DeviceCommand.TopApps }
-    )
-    val settingsScreens = listOf(
-        "WiFi settings" to SettingsScreen.WIFI,
-        "Bluetooth settings" to SettingsScreen.BLUETOOTH,
-        "Display settings" to SettingsScreen.DISPLAY,
-        "Sound settings" to SettingsScreen.SOUND,
-        "Location settings" to SettingsScreen.LOCATION,
-        "Apps settings" to SettingsScreen.APPS,
-        "Storage settings" to SettingsScreen.STORAGE,
-        "Battery saver" to SettingsScreen.BATTERY_SAVER,
-        "Date & time settings" to SettingsScreen.DATE_TIME
-    )
 
     Column(
         modifier = modifier
@@ -227,79 +144,35 @@ fun ActionsScreen(
             )
         }
 
-        NovaSectionHeader(title = "Search & open")
-        ActionGroup(rows = searchAndOpen, onTap = { action ->
-            if (action.inputHint != null) {
-                pendingInput = ""
-                pendingAction = action
-            } else {
-                runAction(action, "")
+        val loaded = catalogue
+        if (loaded == null) {
+            Text(
+                text = "Actions load ho rahi hain…",
+                fontSize = 14.sp,
+                color = colors.textSecondary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            )
+        } else {
+            if (loaded.fromFallback) {
+                NovaInfoCard(
+                    title = "Catalogue load nahi hui",
+                    body = "Actions ki list nahi mili — sirf basic actions " +
+                        "dikha rahi hun. App reinstall karne se theek ho jayega.",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                )
             }
-        })
-
-        NovaSectionHeader(title = "Calls & messages")
-        ActionGroup(rows = callsAndMessages, onTap = { action ->
-            pendingInput = ""
-            pendingAction = action
-        })
-
-        NovaSectionHeader(title = "Phone controls")
-        ActionGroup(rows = phoneControls, onTap = { action ->
-            if (action.inputHint != null) {
-                pendingInput = ""
-                pendingAction = action
-            } else {
-                runAction(action, "")
-            }
-        })
-
-        NovaSectionHeader(title = "Notifications & usage")
-        ActionGroup(rows = notificationsAndUsage, onTap = { action ->
-            if (action.inputHint != null) {
-                pendingInput = ""
-                pendingAction = action
-            } else {
-                runAction(action, "")
-            }
-        })
-
-        NovaSectionHeader(title = "Settings screens")
-        NovaGlassCard(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp)
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                for ((name, screen) in settingsScreens) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = name,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp,
-                                color = colors.textPrimary
-                            )
-                            Text(
-                                text = "Settings screen kholega",
-                                fontSize = 12.sp,
-                                color = colors.textSecondary
-                            )
-                        }
-                        NovaButton(
-                            text = "Open",
-                            onClick = {
-                                runAction(
-                                    ActionDef(name, "") { DeviceCommand.OpenSettings(screen) },
-                                    ""
-                                )
-                            },
-                            type = NovaButtonType.SECONDARY
-                        )
+            for (section in loaded.sections) {
+                NovaSectionHeader(title = section.title)
+                ActionGroup(rows = section.actions, onTap = { action ->
+                    if (action.inputHint != null) {
+                        pendingInput = ""
+                        pendingAction = action
+                    } else {
+                        runAction(action, "")
                     }
-                }
+                })
             }
         }
         Spacer(modifier = Modifier.height(16.dp))
@@ -349,8 +222,8 @@ fun ActionsScreen(
 
 @Composable
 private fun ActionGroup(
-    rows: List<ActionDef>,
-    onTap: (ActionDef) -> Unit
+    rows: List<CatalogueAction>,
+    onTap: (CatalogueAction) -> Unit
 ) {
     val colors = LocalNovaColors.current
     NovaGlassCard(
@@ -385,7 +258,7 @@ private fun ActionGroup(
                         }
                     }
                     NovaButton(
-                        text = "Run",
+                        text = action.button,
                         onClick = { onTap(action) },
                         type = NovaButtonType.SECONDARY
                     )

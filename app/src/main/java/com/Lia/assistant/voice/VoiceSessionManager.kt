@@ -109,6 +109,21 @@ object VoiceSessionManager {
     private val _state = MutableStateFlow(NovaOrbState.IDLE)
     val state: StateFlow<NovaOrbState> = _state.asStateFlow()
 
+    // V16 (APK-delta addition): the explicit turn state machine —
+    // see VoiceTurnState. It mirrors the orb state but tracks the
+    // conversation TURN (listening -> speech -> end-of-speech ->
+    // thinking -> speaking), so the overlay and the debugger can show
+    // exactly where a turn is stuck instead of just "thinking".
+    private val _turnState = MutableStateFlow(VoiceTurnState.IDLE)
+    val turnState: StateFlow<VoiceTurnState> = _turnState.asStateFlow()
+
+    private fun setTurnState(next: VoiceTurnState) {
+        if (_turnState.value != next) {
+            Log.d(TAG, "Turn: ${_turnState.value} -> $next")
+            _turnState.value = next
+        }
+    }
+
     private val _amplitude = MutableStateFlow(0f)
     val amplitude: StateFlow<Float> = _amplitude.asStateFlow()
 
@@ -380,11 +395,13 @@ object VoiceSessionManager {
     private val noKeyRecognitionListener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
             _state.value = NovaOrbState.LISTENING
+            setTurnState(VoiceTurnState.LISTENING)
         }
 
         override fun onBeginningOfSpeech() {
             _state.value = NovaOrbState.LISTENING
             _statusText.value = "Sun rahi hun…"
+            setTurnState(VoiceTurnState.SPEECH_DETECTED)
         }
 
         override fun onRmsChanged(rmsdB: Float) {
@@ -397,8 +414,11 @@ object VoiceSessionManager {
             noKeyListening = false
             _state.value = NovaOrbState.THINKING
             _statusText.value = "Soch rahi hun…"
-            // V15: arm the watchdog — if no reply ever comes back, the
-            // overlay recovers on its own instead of hanging here.
+            // V16: the turn boundary — the user stopped speaking.
+            // The watchdog is armed HERE, from end-of-speech, so a
+            // lost result is caught at the turn boundary, not from a
+            // timer started when listening began.
+            setTurnState(VoiceTurnState.END_OF_SPEECH)
             armThinkingWatchdog()
         }
 
@@ -409,15 +429,20 @@ object VoiceSessionManager {
             when (error) {
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
                     _state.value = NovaOrbState.ERROR
+                    setTurnState(VoiceTurnState.ERROR)
                     _statusText.value = "Microphone permission chahiye — Settings se allow karo."
                     _lastError.value = "Microphone permission missing"
                 }
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
                     // Quiet room — listen again after a short pause.
+                    setTurnState(VoiceTurnState.IDLE)
                     scheduleNoKeyRestart(1_500L)
                 }
-                else -> scheduleNoKeyRestart(800L)
+                else -> {
+                    setTurnState(VoiceTurnState.IDLE)
+                    scheduleNoKeyRestart(800L)
+                }
             }
         }
 
@@ -455,6 +480,9 @@ object VoiceSessionManager {
         }
         _state.value = NovaOrbState.THINKING
         _statusText.value = "Soch rahi hun…"
+        // V16: the transcript arrived — the turn moves from
+        // END_OF_SPEECH to THINKING.
+        setTurnState(VoiceTurnState.THINKING)
         armThinkingWatchdog()
 
         // V15: long-term memory — same rules as text chat, spoken.
@@ -637,11 +665,13 @@ object VoiceSessionManager {
             // TTS cannot speak: show the reply so it is not lost.
             _statusText.value = text.take(200)
             _state.value = NovaOrbState.LISTENING
+            setTurnState(VoiceTurnState.LISTENING)
             onDone?.invoke()
             return
         }
         noKeySpeaking = true
         _state.value = NovaOrbState.SPEAKING
+        setTurnState(VoiceTurnState.SPEAKING)
         _statusText.value = "Lia bol rahi hai…"
         _amplitude.value = 0.4f
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -651,12 +681,14 @@ object VoiceSessionManager {
                 noKeySpeaking = false
                 _amplitude.value = 0f
                 _state.value = NovaOrbState.LISTENING
+                setTurnState(VoiceTurnState.LISTENING)
                 onDone?.invoke()
             }
 
             override fun onError(utteranceId: String?) {
                 noKeySpeaking = false
                 _amplitude.value = 0f
+                setTurnState(VoiceTurnState.LISTENING)
                 onDone?.invoke()
             }
         })
@@ -674,6 +706,7 @@ object VoiceSessionManager {
             _amplitude.value = 0f
             _statusText.value = text.take(200)
             _state.value = NovaOrbState.LISTENING
+            setTurnState(VoiceTurnState.LISTENING)
             onDone?.invoke()
         }
     }
@@ -744,6 +777,7 @@ object VoiceSessionManager {
                 }
 
                 _state.value = NovaOrbState.SPEAKING
+                setTurnState(VoiceTurnState.SPEAKING)
                 _statusText.value = "$assistantName is speaking..."
                 val amp = audioIO?.playChunk(bytes) ?: 0f
                 _amplitude.value = amp
@@ -756,6 +790,7 @@ object VoiceSessionManager {
                         isTurnActive = false
                         EchoGuard.notifyPlaybackStopped()
                         _state.value = NovaOrbState.LISTENING
+                        setTurnState(VoiceTurnState.LISTENING)
                         _statusText.value = "Listening..."
                         _amplitude.value = 0f
                         SpeechLevelTracker.reset()
@@ -1009,6 +1044,7 @@ object VoiceSessionManager {
 
         isTurnActive = false
         _state.value = NovaOrbState.IDLE
+        setTurnState(VoiceTurnState.IDLE)
         _statusText.value = "Ready to talk"
         _amplitude.value = 0f
         SpeechLevelTracker.reset()
