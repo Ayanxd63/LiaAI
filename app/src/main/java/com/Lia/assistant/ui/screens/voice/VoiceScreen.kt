@@ -252,10 +252,9 @@ fun VoiceScreen(
                     }
 
                     // V16 (P0-4): timeout errors surface distinctly —
-                    // a 20s timeout, an API/key failure and an offline
-                    // failure are three different problems with three
-                    // different fixes, so they must not all read as
-                    // "Soch rahi hun…".
+                    // a 20s timeout and an API/key failure are different
+                    // problems with different fixes, so they must not
+                    // all read as "Soch rahi hun…".
                     if (state == NovaOrbState.ERROR) {
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
@@ -263,14 +262,10 @@ fun VoiceScreen(
                                 statusText.contains("Zyada der", ignoreCase = true) ||
                                     lastError?.contains("imeout", ignoreCase = true) == true ->
                                     "Timeout: 20 second mein jawab nahi aaya — " +
-                                        "dobara bolo. (Net slow ho to Offline engine try karo.)"
+                                        "dobara bolo."
                                 lastError?.contains("key", ignoreCase = true) == true ->
                                     "API key ka masla hai — Settings > Gemini API Key " +
                                         "check karo, ya Pollinations engine use karo."
-                                statusText.contains("Offline", ignoreCase = true) ||
-                                    lastError?.contains("ffline", ignoreCase = true) == true ->
-                                    "Offline engine ka masla — Settings > Offline AI " +
-                                        "se model download check karo."
                                 else -> lastError
                                     ?: "Kuch ghalat ho gaya — dobara try karo."
                             },

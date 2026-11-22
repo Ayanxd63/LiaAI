@@ -5,7 +5,6 @@ import android.os.Environment
 import com.Lia.assistant.voice.ChatReplyResult
 import com.Lia.assistant.voice.ChatTurn
 import com.Lia.assistant.voice.GeminiTextClient
-import com.Lia.assistant.voice.OfflineLlmClient
 import com.Lia.assistant.voice.PollinationsClient
 import java.io.File
 import java.text.SimpleDateFormat
@@ -116,8 +115,7 @@ object SubAgentRunner {
         val engines = EnginePresetPreferences.resolveEngines(context)
         if (engines.isEmpty()) {
             return ChatReplyResult.Error(
-                "Koi engine available nahi — net check karo, ya Settings > " +
-                    "Offline AI se model download karo."
+                "Koi engine available nahi — net check karo."
             )
         }
         var lastError: ChatReplyResult.Error? = null
@@ -126,11 +124,6 @@ object SubAgentRunner {
                 ChatEngine.POLLINATIONS -> PollinationsClient.chat(
                     systemInstruction,
                     history
-                )
-                ChatEngine.OFFLINE -> OfflineLlmClient.chat(
-                    context,
-                    systemInstruction,
-                    topic
                 )
                 ChatEngine.GEMINI -> {
                     val key = ApiKeyStore.getKey(context)

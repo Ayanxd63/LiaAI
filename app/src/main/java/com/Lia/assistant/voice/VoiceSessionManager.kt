@@ -22,17 +22,11 @@ import com.Lia.assistant.data.ChatHistoryMessage
 import com.Lia.assistant.data.ChatHistoryStore
 import com.Lia.assistant.data.ChatSession
 import com.Lia.assistant.data.DeviceTtsVoicePreferences
-import com.Lia.assistant.data.EnginePreferences
-import com.Lia.assistant.data.EnginePreset
-import com.Lia.assistant.data.EnginePresetPreferences
 import com.Lia.assistant.data.FactMemoryStore
 import com.Lia.assistant.data.LanguagePreference
-import com.Lia.assistant.data.LaughDetectionPreferences
 import com.Lia.assistant.data.MemoryCapture
 import com.Lia.assistant.data.MemoryFact
 import com.Lia.assistant.data.NovaPreferences
-import com.Lia.assistant.data.OnDeviceSttPreferences
-import com.Lia.assistant.data.PocketTtsVoicePreferences
 import com.Lia.assistant.data.VoiceOutputEngine
 import com.Lia.assistant.data.VoiceOutputPreferences
 import com.Lia.assistant.data.Personality
@@ -82,9 +76,6 @@ object VoiceSessionManager {
 
     /** V15: short retry waits for voice (text chat uses 2s/5s/10s). */
     private val VOICE_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L)
-
-    /** V15: short spoken replies from the tiny offline model (faster). */
-    private const val OFFLINE_VOICE_PREDICT_LENGTH = 128
 
     private val thinkingWatchdogRunnable = Runnable {
         if (!_isActive.value || !noKeyMode) return@Runnable
@@ -168,18 +159,6 @@ object VoiceSessionManager {
     private var noKeyTts: TextToSpeech? = null
     private var noKeyTtsReady = false
 
-    // V17 — on-device voice engines, pre-loaded in the background when
-    // the session starts (each loads tens-to-hundreds of MB of ONNX
-    // models; never on the listening path). Null = not enabled, not
-    // ready yet, or not available on this phone — every use site falls
-    // back to the system TTS / system recognizer then.
-    private var pocketTts: PocketTtsEngine? = null
-    private var moonshineStt: MoonshineSttEngine? = null
-    private var laughDetector: LaughDetector? = null
-
-    /** V17: one-shot — the next listening round uses the system recognizer. */
-    @Volatile
-    private var forceSystemRecognizerOnce = false
     private var noKeyListening = false
     private var noKeySpeaking = false
     private var noKeyRestartJob: Job? = null
@@ -338,56 +317,6 @@ object VoiceSessionManager {
             }
         }
 
-        // V17 — pre-load the on-device voice engines in the background.
-        // Each one loads tens-to-hundreds of MB of ONNX models, so it
-        // must never happen on the listening/speaking path: until an
-        // engine is ready, its turns fall back to the system TTS /
-        // system recognizer instead of stalling.
-        if (VoiceOutputPreferences.getEngine(context) == VoiceOutputEngine.POCKET) {
-            scope.launch {
-                pocketTts = PocketTtsEngine.create(
-                    context,
-                    PocketTtsVoicePreferences.getVoiceId(context)
-                )
-            }
-        }
-        if (OnDeviceSttPreferences.isEnabled(context)) {
-            scope.launch {
-                val engine = MoonshineSttEngine.create(context)
-                engine?.turnListener = { event ->
-                    when (event) {
-                        MoonshineSttEngine.TurnEvent.SPEECH_START -> {
-                            _state.value = NovaOrbState.LISTENING
-                            _statusText.value = "Sun rahi hun…"
-                            setTurnState(VoiceTurnState.SPEECH_DETECTED)
-                        }
-                        MoonshineSttEngine.TurnEvent.SPEECH_END -> {
-                            _state.value = NovaOrbState.THINKING
-                            _statusText.value = "Soch rahi hun…"
-                            setTurnState(VoiceTurnState.END_OF_SPEECH)
-                            armThinkingWatchdog()
-                        }
-                    }
-                }
-                engine?.audioListener = { audio ->
-                    // V17 item 4: laugh check on the captured utterance.
-                    val detector = laughDetector
-                    if (detector != null && audio.isNotEmpty()) {
-                        scope.launch {
-                            val events = detector.detect(audio)
-                            if (LaughDetector.isLaugh(events)) LaughSignal.noteLaugh()
-                        }
-                    }
-                }
-                moonshineStt = engine
-            }
-            if (LaughDetectionPreferences.isEnabled(context)) {
-                scope.launch {
-                    laughDetector = LaughDetector.create(context)
-                }
-            }
-        }
-
         startNoKeyListening()
     }
 
@@ -402,18 +331,6 @@ object VoiceSessionManager {
         // or another — the watchdog's job is done.
         disarmThinkingWatchdog()
         if (!_isActive.value || !noKeyMode || _muted.value || noKeySpeaking) return
-        val sessionCtx = appContext
-        // V17: on-device speech recognition when the user enabled it
-        // and the model is on the phone (English only — Urdu/Hindi
-        // still use the system recognizer below).
-        val useMoonshine = sessionCtx != null && !forceSystemRecognizerOnce &&
-            OnDeviceSttPreferences.isEnabled(sessionCtx) &&
-            MoonshineSttEngine.isReady(sessionCtx)
-        forceSystemRecognizerOnce = false
-        if (useMoonshine && sessionCtx != null) {
-            startMoonshineListening(sessionCtx)
-            return
-        }
         mainHandler.post {
             if (!_isActive.value || !noKeyMode || _muted.value || noKeySpeaking) return@post
             val ctx = appContext ?: return@post
@@ -450,51 +367,9 @@ object VoiceSessionManager {
         }
     }
 
-    /**
-     * V17 — one listening round with on-device Moonshine STT. The
-     * engine was pre-loaded when the session started; when it is not
-     * there (still loading, or failed), this round falls back to the
-     * system recognizer instead of failing the turn.
-     */
-    private fun startMoonshineListening(ctx: Context) {
-        if (!_isActive.value || !noKeyMode || _muted.value || noKeySpeaking) return
-        val engine = moonshineStt
-        if (engine == null) {
-            forceSystemRecognizerOnce = true
-            startNoKeyListening()
-            return
-        }
-        noKeyListening = true
-        _state.value = NovaOrbState.LISTENING
-        _statusText.value = "Boliye, main sun rahi hun… (on-device)"
-        setTurnState(VoiceTurnState.LISTENING)
-        engine.listenOnce(
-            ctx,
-            onResult = { text ->
-                noKeyListening = false
-                _amplitude.value = 0f
-                if (text.isBlank()) {
-                    scheduleNoKeyRestart(500L)
-                    return@listenOnce
-                }
-                handleNoKeyTranscript(text)
-            },
-            onError = { message ->
-                noKeyListening = false
-                _amplitude.value = 0f
-                if (!_isActive.value || !noKeyMode || _muted.value) return@listenOnce
-                _state.value = NovaOrbState.ERROR
-                _statusText.value = message
-                setTurnState(VoiceTurnState.ERROR)
-                scheduleNoKeyRestart(1_500L)
-            }
-        )
-    }
-
     private fun stopNoKeyListening() {
         noKeyRestartJob?.cancel()
         noKeyRestartJob = null
-        moonshineStt?.stopListening()
         if (!noKeyListening) return
         noKeyListening = false
         try {
@@ -685,8 +560,8 @@ object VoiceSessionManager {
                     detectedLanguage = _detectedLanguage.value,
                     recap = ConversationMemory.recap(),
                     assistantName = assistantName,
-                    // V17 item 5: semantic memory when embeddings are
-                    // on and ready, otherwise the recency block.
+                    // V18: embeddings were removed with the diet — the
+                    // recency block is the only memory search now.
                     memoryBlock = FactMemoryStore.memoryBlockForQuery(ctx, trimmed),
                     // V16 (P1-7): Lia's own voice beats.
                     beats = LiaVoiceBeats.section(
@@ -696,58 +571,23 @@ object VoiceSessionManager {
                             NovaPreferences.Keys.USER_NAME,
                             "Friend"
                         )
-                    ) + if (LaughSignal.consumeRecentLaugh()) {
-                        // V17 item 4: he just laughed — notice it once.
-                        "\n" + LiaVoiceBeats.laughBeat()
-                    } else {
-                        ""
-                    }
+                    )
                 )
                 val history = ConversationMemory.snapshot().map { turn ->
                     ChatTurn(isUser = turn.role == MemoryRole.USER, text = turn.text)
                 }
-                // V16 (P0-6): the Fast preset answers offline first when a
-                // model is on the phone (no network wait); other presets
-                // keep the chosen engine, with the usual offline fallback.
-                val offlineReady = OfflineModelManager.isModelReady(ctx)
-                val useOffline = EnginePreferences.useOffline(ctx) ||
-                    (EnginePresetPreferences.getPreset(ctx) == EnginePreset.FAST &&
-                        offlineReady)
-                val fallbackEnabled = EnginePreferences.isOfflineFallbackEnabled(ctx)
-
+                // V18: online only — the offline model was removed in
+                // the diet. Pollinations answers every voice turn.
                 // 20s deadline for the whole round-trip: a hung request
                 // must never wedge the overlay (V14 bug #2).
-                var result: ChatReplyResult? = withTimeoutOrNull(VOICE_REPLY_TIMEOUT_MS) {
-                    if (useOffline) {
-                        OfflineLlmClient.chat(
-                            ctx, systemInstruction, trimmed,
-                            predictLength = OFFLINE_VOICE_PREDICT_LENGTH
-                        )
-                    } else {
-                        PollinationsClient.chat(
-                            systemInstruction, history,
-                            onRetrying = { attempt ->
-                                _statusText.value = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
-                            },
-                            retryDelaysMs = VOICE_RETRY_DELAYS_MS
-                        )
-                    }
-                }
-
-                // Fast offline fallback (V15): the online engine is
-                // rate-limited or unreachable AND a verified model is on
-                // the phone — a quick offline reply beats a long wait.
-                if (result is ChatReplyResult.Error &&
-                    (result.isRateLimited || result.isNetworkError) &&
-                    fallbackEnabled && offlineReady && !useOffline
-                ) {
-                    _statusText.value = "Offline jawab — net slow tha."
-                    result = withTimeoutOrNull(VOICE_REPLY_TIMEOUT_MS) {
-                        OfflineLlmClient.chat(
-                            ctx, systemInstruction, trimmed,
-                            predictLength = OFFLINE_VOICE_PREDICT_LENGTH
-                        )
-                    }
+                val result: ChatReplyResult? = withTimeoutOrNull(VOICE_REPLY_TIMEOUT_MS) {
+                    PollinationsClient.chat(
+                        systemInstruction, history,
+                        onRetrying = { attempt ->
+                            _statusText.value = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
+                        },
+                        retryDelaysMs = VOICE_RETRY_DELAYS_MS
+                    )
                 }
 
                 when (val finalResult = result) {
@@ -821,17 +661,6 @@ object VoiceSessionManager {
         when (order[index]) {
             VoiceOutputEngine.ONLINE -> speakOnlineNoKey(ctx, text, onDone) {
                 speakVoiceChain(ctx, order, index + 1, text, onDone)
-            }
-            VoiceOutputEngine.POCKET -> {
-                val engine = pocketTts
-                if (engine != null && !engine.isSpeaking()) {
-                    speakPocketNoKey(engine, text, onDone) {
-                        speakVoiceChain(ctx, order, index + 1, text, onDone)
-                    }
-                } else {
-                    // On-device voice not loaded yet — next engine.
-                    speakVoiceChain(ctx, order, index + 1, text, onDone)
-                }
             }
             VoiceOutputEngine.SYSTEM -> speakSystemNoKey(text, onDone)
         }
@@ -936,49 +765,6 @@ object VoiceSessionManager {
             setTurnState(VoiceTurnState.LISTENING)
             onDone?.invoke()
         }
-    }
-
-    /**
-     * V17 — speak one reply with the on-device Pocket TTS voice.
-     * Same contract as the system-TTS path above: [onDone] always
-     * fires (or the reply shows as text), so the turn can never wedge
-     * on "speaking".
-     */
-    private fun speakPocketNoKey(
-        engine: PocketTtsEngine,
-        text: String,
-        onDone: (() -> Unit)? = null,
-        onFallback: (() -> Unit)? = null
-    ) {
-        noKeySpeaking = true
-        _state.value = NovaOrbState.SPEAKING
-        setTurnState(VoiceTurnState.SPEAKING)
-        _statusText.value = "Lia bol rahi hai…"
-        _amplitude.value = 0.4f
-        engine.speak(
-            text,
-            onDone = {
-                noKeySpeaking = false
-                _amplitude.value = 0f
-                _state.value = NovaOrbState.LISTENING
-                setTurnState(VoiceTurnState.LISTENING)
-                onDone?.invoke()
-            },
-            onError = { message ->
-                Log.w(TAG, "Pocket TTS failed: $message")
-                noKeySpeaking = false
-                _amplitude.value = 0f
-                if (onFallback != null) {
-                    // Next engine in the chain speaks instead.
-                    onFallback()
-                } else {
-                    _statusText.value = text.take(200)
-                    _state.value = NovaOrbState.LISTENING
-                    setTurnState(VoiceTurnState.LISTENING)
-                    onDone?.invoke()
-                }
-            }
-        )
     }
 
     private suspend fun connectSession(isResuming: Boolean) {
@@ -1251,7 +1037,6 @@ object VoiceSessionManager {
         if (noKeyMode) {
             if (next) {
                 stopNoKeyListening()
-                pocketTts?.stop()
                 try {
                     noKeyTts?.stop()
                 } catch (_: Exception) {
@@ -1272,21 +1057,6 @@ object VoiceSessionManager {
         // V15: the thinking watchdog belongs to this session only.
         disarmThinkingWatchdog()
         pendingMemoryFact = null
-        // V15: unload the offline model with the session (frees ~0.7 GB
-        // and resets the native chat history, matching the
-        // ConversationMemory.clear() below).
-        OfflineLlmClient.unloadNow()
-
-        // V17: release the on-device voice engines with the session
-        // (frees the model RAM — Pocket TTS ~0.5 GB, Moonshine ~0.3 GB).
-        pocketTts?.release()
-        pocketTts = null
-        moonshineStt?.release()
-        moonshineStt = null
-        laughDetector?.release()
-        laughDetector = null
-        forceSystemRecognizerOnce = false
-
         // V12 no-key cleanup: cancel + destroy the recognizer and stop +
         // shut down TTS, so nothing keeps the mic after the session ends
         // — the same guarantee as the Live path below.

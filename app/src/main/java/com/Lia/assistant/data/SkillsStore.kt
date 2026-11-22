@@ -4,14 +4,13 @@ import android.content.Context
 import com.Lia.assistant.voice.ChatReplyResult
 import com.Lia.assistant.voice.ChatTurn
 import com.Lia.assistant.voice.GeminiTextClient
-import com.Lia.assistant.voice.OfflineLlmClient
 import com.Lia.assistant.voice.PollinationsClient
 
 /**
  * V16 (P1-2) — the skills store: 6 real local skills.
  *
  * Each skill is a prompt template over Lia's free engines (Pollinations
- * / offline / Gemini-when-keyed) — no fake buttons, no mock results.
+ * / Gemini-when-keyed) — no fake buttons, no mock results.
  * "Install" pins the skill (persisted); an installed skill can Run with
  * the user's own input and shows the real reply in a result card. The
  * header shows "N/6 installed". Skills run through the same engine
@@ -134,8 +133,7 @@ object SkillsStore {
         val engines = EnginePresetPreferences.resolveEngines(context)
         if (engines.isEmpty()) {
             return ChatReplyResult.Error(
-                "Koi engine available nahi — net check karo, ya Settings > " +
-                    "Offline AI se model download karo."
+                "Koi engine available nahi — net check karo."
             )
         }
         var lastError: ChatReplyResult.Error? = null
@@ -144,11 +142,6 @@ object SkillsStore {
                 ChatEngine.POLLINATIONS -> PollinationsClient.chat(
                     skill.promptTemplate,
                     history
-                )
-                ChatEngine.OFFLINE -> OfflineLlmClient.chat(
-                    context,
-                    skill.promptTemplate,
-                    input
                 )
                 ChatEngine.GEMINI -> {
                     val key = ApiKeyStore.getKey(context)

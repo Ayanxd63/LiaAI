@@ -21,6 +21,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "LiaAI"
 include(":app")
-// V15: vendored llama.cpp Android binding (see llama-lib/NOTICE.md).
-// The C++ sources are cloned by CI into llama.cpp/ at the repo root.
-include(":llama-lib")
+// V18 diet: the offline LLM module (llama-lib) and the on-device
+// voice engine (sherpa-onnx) were removed — the app is online +
+// Vosk wake word + system voices only.

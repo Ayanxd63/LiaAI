@@ -87,7 +87,6 @@ import com.Lia.assistant.voice.ElevenLabsResult
 import com.Lia.assistant.voice.GeminiTextClient
 import com.Lia.assistant.voice.LiaVoiceBeats
 import com.Lia.assistant.voice.NovaOrbState
-import com.Lia.assistant.voice.OfflineLlmClient
 import com.Lia.assistant.voice.PollinationsClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -100,9 +99,9 @@ private const val MAX_ELEVENLABS_TTS_CHARS = 1000
 /**
  * V13 — show engine failures the way a girlfriend would: warm Roman
  * Urdu, never a raw "Error: ..." line. Network problems (the common
- * case on a slow connection) get the offline message; overload gets a
- * "try again in a minute"; anything else is shown as-is, without the
- * "Error: " prefix.
+ * case on a slow connection) get the friendly no-net message; overload
+ * gets a "try again in a minute"; anything else is shown as-is,
+ * without the "Error: " prefix.
  */
 private fun friendlyDisplayError(raw: String): String {
     val lower = raw.lowercase()
@@ -443,15 +442,14 @@ fun ChatScreen(
             return
         }
 
-        // V12/V15: call the selected engine. Pollinations is the default —
+        // V12/V18: call the selected engine. Pollinations is the default —
         // free, no key, works the moment the app opens. Gemini is used
         // only when the user added a key AND picked Gemini in Settings.
-        // OFFLINE is the on-device model (no network, no key).
-        // V15 (fast replies): the reply STREAMS in live — Pollinations
-        // tokens and offline tokens fill the bubble as they arrive,
-        // instead of waiting for the whole answer. A rate-limited or
-        // unreachable online engine falls back to a quick offline reply
-        // at once (with a plain-language label) instead of a long wait.
+        // V18: the offline engine was removed in the diet — every reply
+        // is online now. V15 (fast replies): the reply STREAMS in live —
+        // Pollinations tokens fill the bubble as they arrive, instead of
+        // waiting for the whole answer. A rate-limited or unreachable
+        // online engine moves to the next engine in the preset order.
         isTyping = true
         retryNote = null
         elevenNote = null
@@ -501,26 +499,13 @@ fun ChatScreen(
 
             // V16 (P0-6): try the engines in preset order. A rate-limit /
             // network error moves to the next engine; a hard error stops
-            // the chain. Falling back TO offline keeps the plain-language
-            // label (usedOfflineFallback, shown until the turn ends).
+            // the chain.
             var result: ChatReplyResult = ChatReplyResult.Error(
-                "Koi engine available nahi — net check karo, ya Settings > " +
-                    "Offline AI se model download karo."
+                "Koi engine available nahi — net check karo."
             )
-            var usedOfflineFallback = false
             for ((index, engine) in engines.withIndex()) {
                 val isLast = index == engines.lastIndex
                 val attempt: ChatReplyResult = when (engine) {
-                    ChatEngine.OFFLINE -> OfflineLlmClient.chat(
-                        context,
-                        systemInstruction,
-                        trimmed,
-                        onToken = if (humanPaced) {
-                            null
-                        } else {
-                            { text -> updatePlaceholder(text) }
-                        }
-                    )
                     ChatEngine.GEMINI -> GeminiTextClient.reply(
                         apiKey,
                         systemInstruction,
@@ -550,16 +535,8 @@ fun ChatScreen(
                     is ChatReplyResult.Error -> {
                         result = attempt
                         if ((attempt.isRateLimited || attempt.isNetworkError) && !isLast) {
-                            val nextEngine = engines[index + 1]
-                            if (nextEngine == ChatEngine.OFFLINE) {
-                                usedOfflineFallback = true
-                                scope.launch {
-                                    retryNote = "Offline jawab — net slow tha, is liye phone se jawab de rahi hun."
-                                }
-                            } else {
-                                scope.launch {
-                                    retryNote = "Thoda wait — doosre engine se try kar rahi hun…"
-                                }
+                            scope.launch {
+                                retryNote = "Thoda wait — doosre engine se try kar rahi hun…"
                             }
                             continue
                         }
@@ -570,7 +547,7 @@ fun ChatScreen(
 
             withContext(Dispatchers.Main) {
                 isTyping = false
-                if (!usedOfflineFallback) retryNote = null
+                retryNote = null
                 when (result) {
                     is ChatReplyResult.Success -> {
                         val finalIdx = messages.indexOfFirst { it.id == placeholderId }
@@ -609,7 +586,7 @@ fun ChatScreen(
                                     }
                                 }
                             } else {
-                                // Streamed (Pollinations / offline): the
+                                // Streamed (Pollinations): the
                                 // text is already there — just finish.
                                 messages[finalIdx] = messages[finalIdx].copy(isStreaming = false)
                                 persistSession()

@@ -1,31 +1,30 @@
 package com.Lia.assistant.data
 
 import android.content.Context
-import com.Lia.assistant.voice.OfflineModelManager
 
 /**
  * V16 — engine presets: prompt + behaviour presets over Lia's free
- * engines (Pollinations / offline / Gemini-when-keyed). A preset drives
+ * engines (Pollinations / Gemini-when-keyed). A preset drives
  * the fallback ORDER (which engine is tried first) and adds one short
  * style instruction to the chat/voice prompt.
  *
- * - FAST: offline first (no network wait — the quickest reply on the
- *   phone), then Pollinations, then Gemini. Best when the user wants
+ * - FAST: Pollinations first, short replies. Best when the user wants
  *   speed above all.
  * - WARM (default): the user's chosen engine first, then Pollinations,
- *   then offline, then Gemini. This is exactly the V15 behaviour, so
+ *   then Gemini. This is exactly the V15 behaviour, so
  *   nothing changes for existing users.
  * - SMART: Gemini first when a key is saved (best quality), otherwise
- *   Pollinations, then offline.
+ *   Pollinations.
  *
- * Only engines that are actually available are listed: Gemini needs a
- * saved key, Offline needs the downloaded model. Pollinations is always
+ * V18: the offline engine was removed in the diet, so the presets no
+ * longer mention it. Only engines that are actually available are
+ * listed: Gemini needs a saved key. Pollinations is always
  * available (free, no key).
  */
 enum class EnginePreset(val displayName: String, val tagline: String) {
     FAST(
         "Fast",
-        "Sab se tez jawab — offline pehle, chhote jawab"
+        "Sab se tez jawab — chhote jawab, turant"
     ),
     WARM(
         "Warm",
@@ -73,7 +72,6 @@ object EnginePresetPreferences {
     private fun isUsable(context: Context, engine: ChatEngine): Boolean = when (engine) {
         ChatEngine.POLLINATIONS -> true
         ChatEngine.GEMINI -> ApiKeyStore.hasKey(context)
-        ChatEngine.OFFLINE -> OfflineModelManager.isModelReady(context)
     }
 
     /**
@@ -83,7 +81,6 @@ object EnginePresetPreferences {
      */
     fun resolveEngines(context: Context): List<ChatEngine> {
         val chosen = EnginePreferences.getEngine(context)
-        val offlineReady = OfflineModelManager.isModelReady(context)
         val geminiReady = ApiKeyStore.hasKey(context)
         val ordered = mutableListOf<ChatEngine>()
         fun add(engine: ChatEngine) {
@@ -91,19 +88,16 @@ object EnginePresetPreferences {
         }
         when (getPreset(context)) {
             EnginePreset.FAST -> {
-                if (offlineReady) add(ChatEngine.OFFLINE)
                 add(ChatEngine.POLLINATIONS)
                 if (geminiReady) add(ChatEngine.GEMINI)
             }
             EnginePreset.SMART -> {
                 if (geminiReady) add(ChatEngine.GEMINI)
                 add(ChatEngine.POLLINATIONS)
-                if (offlineReady) add(ChatEngine.OFFLINE)
             }
             EnginePreset.WARM -> {
                 add(chosen)
                 add(ChatEngine.POLLINATIONS)
-                if (offlineReady) add(ChatEngine.OFFLINE)
                 if (geminiReady) add(ChatEngine.GEMINI)
             }
         }

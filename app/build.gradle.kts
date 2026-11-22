@@ -18,6 +18,13 @@ android {
         versionCode = 1
         versionName = "1.0.0"
 
+        // V18 diet: arm64-v8a only — the user's phone (and nearly every
+        // modern Android phone) is arm64. Shipping x86_64/x86/armeabi-v7a
+        // tripled the native-library size for phones nobody uses here.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
@@ -57,6 +64,18 @@ android {
         }
         debug {
             applicationIdSuffix = ".debug"
+            // V18 diet: the workflow builds directDebug, so the diet
+            // applies here — R8 + resource shrinking (same rules file
+            // as release; proguard-rules.pro already keeps the JNI
+            // bridges, Compose/data classes and reflection entry
+            // points). If R8 ever breaks the debug build, turn these
+            // two flags off and say so in the build report.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 
@@ -110,22 +129,10 @@ dependencies {
     // V15: Keystore-backed encrypted credential storage (security-crypto
     // 1.1.0, stable July 2025 — verified on Google Maven 2026-11-22).
     implementation("androidx.security:security-crypto:1.1.0")
-    // V15: offline on-device LLM — vendored llama.cpp Android binding.
-    // The native library builds from the CI-cloned llama.cpp sources
-    // (see .github/workflows/android.yml and llama-lib/NOTICE.md).
-    implementation(project(":llama-lib"))
-
-    // V17: on-device voice engine — sherpa-onnx 2.0.3 (Apache-2.0).
-    // It is NOT on Maven Central, so there is no Maven coordinate to
-    // pin: CI downloads the release tarball + JVM jar (SHA-256
-    // checked) and places the native libs in app/src/main/jniLibs and
-    // the jar in app/libs (see .github/workflows/android.yml). A local
-    // build without that step fails on the missing jar file — build on
-    // GitHub Actions, like V15's first builds.
-    implementation(files("libs/sherpa-onnx-jvm-2.0.3.jar"))
-    // V17: on-device memory embeddings — TensorFlow Lite (MiniLM-L6-v2).
-    // 2.17.0 is the latest on Maven Central (verified 2026-11-22).
-    implementation("org.tensorflow:tensorflow-lite:2.17.0")
+    // V18 diet: the offline LLM (llama-lib) and the on-device voice
+    // engine (sherpa-onnx jar + TensorFlow Lite) were removed. The
+    // voice stack is now Vosk wake word + system SpeechRecognizer /
+    // system TTS + the online Kokoro voice (OkHttp, already here).
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

@@ -22,7 +22,6 @@ import com.Lia.assistant.R
 import com.Lia.assistant.data.AlwaysListeningPreferences
 import com.Lia.assistant.data.AssistantBrand
 import com.Lia.assistant.data.NovaPreferences
-import com.Lia.assistant.data.VadGatePreferences
 import com.Lia.assistant.ui.fx.OverlayEdgeGlowController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -130,15 +129,6 @@ class VoiceForegroundService : Service() {
     private var spotter: WakeWordSpotter? = null
     private var spotterError: String? = null
     private var stopping: Boolean = false
-
-    // V17 item 6 — the VAD gate loop (Silero VAD) and its mic reader.
-    // When the gate is on, the VAD owns the mic while always-listening
-    // is idle and only starts Vosk while speech is present.
-    private var vadGate: SileroVadGate? = null
-    private var vadThread: Thread? = null
-    private var vadRecord: android.media.AudioRecord? = null
-    @Volatile
-    private var vadRunning: Boolean = false
 
     /**
      * The session observer must ignore the FIRST collected value: when
@@ -271,23 +261,16 @@ class VoiceForegroundService : Service() {
     }
 
     // ------------------------------------------------------------------
-    // Wake-word spotter (V14), optionally VAD-gated (V17 item 6)
+    // Wake-word spotter (V14) — Vosk runs continuously while
+    // always-listening is on. (V18: the V17 VAD gate was removed.)
     // ------------------------------------------------------------------
 
     private fun startSpotter() {
         if (stopping || !alwaysListening) return
-        // V17: when the VAD gate is on and its model is ready, the VAD
-        // owns the mic and only starts Vosk while speech is present.
-        // Otherwise Vosk runs continuously, exactly as in V14.
-        if (VadGatePreferences.isEnabled(this) && SileroVadGate.isReady(this)) {
-            startVadLoop()
-        } else {
-            startVoskSpotter()
-        }
+        startVoskSpotter()
     }
 
     private fun stopSpotter() {
-        stopVadLoop()
         stopVoskSpotter()
     }
 
@@ -328,95 +311,6 @@ class VoiceForegroundService : Service() {
     private fun stopVoskSpotter() {
         spotter?.release()
         spotter = null
-    }
-
-    /**
-     * V17 item 6 — the VAD gate loop. Reads the mic in 512-sample
-     * frames; the turn detector (item 7) starts Vosk on speech and
-     * stops it after ~3 s of silence. The VAD model is tiny (2.3 MB,
-     * 1 thread), so this costs far less battery than decoding every
-     * silent frame with Vosk.
-     *
-     * Note: while Vosk is running, both AudioRecords are active at
-     * once (the VAD keeps watching for the silence that stops Vosk).
-     * Android allows several AudioRecords in one app; the pair is
-     * still untested on a real phone — if the Infinix refuses the
-     * second recorder, the VAD loop logs the failure and Vosk keeps
-     * running ungated (see the catch in the loop).
-     */
-    private fun startVadLoop() {
-        if (vadRunning) return
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            spotterError = "Microphone permission missing"
-            refreshNotification()
-            return
-        }
-        val gate = SileroVadGate.create(this)
-        if (gate == null) {
-            // Model vanished — fall back to ungated Vosk, not silence.
-            startVoskSpotter()
-            return
-        }
-        vadGate = gate
-        vadRunning = true
-        val thread = Thread({
-            var record: android.media.AudioRecord? = null
-            try {
-                record = MicRecorder.createAudioRecord()
-                vadRecord = record
-                if (record == null) {
-                    mainHandler.post { startVoskSpotter() }
-                    return@Thread
-                }
-                record.startRecording()
-                val detector = VoiceTurnDetector(
-                    gate,
-                    silenceFramesToEnd = 94, // 94 × 32 ms ≈ 3 s
-                    onSpeechStart = {
-                        mainHandler.post { startVoskSpotter() }
-                    },
-                    onSpeechEnd = {
-                        mainHandler.post { stopVoskSpotter() }
-                    }
-                )
-                val chunk = ShortArray(1024)
-                val frame = FloatArray(SileroVadGate.WINDOW_SAMPLES)
-                var filled = 0
-                while (vadRunning && !stopping && alwaysListening) {
-                    val read = record.read(chunk, 0, chunk.size)
-                    if (read <= 0) continue
-                    for (i in 0 until read) {
-                        frame[filled++] =
-                            (chunk[i].toFloat() / 32768f).coerceIn(-1f, 1f)
-                        if (filled < SileroVadGate.WINDOW_SAMPLES) continue
-                        filled = 0
-                        detector.feed(frame)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "VAD gate loop failed — falling back to ungated Vosk", e)
-                mainHandler.post {
-                    if (alwaysListening && !stopping) startVoskSpotter()
-                }
-            } finally {
-                runCatching { record?.stop() }
-                runCatching { record?.release() }
-                vadRecord = null
-                runCatching { gate.release() }
-                vadGate = null
-            }
-        }, "vad-gate-loop")
-        vadThread = thread
-        thread.start()
-        refreshNotification()
-    }
-
-    private fun stopVadLoop() {
-        vadRunning = false
-        runCatching { vadRecord?.stop() }
-        vadThread = null
     }
 
     /** "Hey Lia" heard: stop spotting, start a normal voice session. */
