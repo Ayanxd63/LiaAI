@@ -53,11 +53,15 @@ import com.Lia.assistant.action.AppContext
 import com.Lia.assistant.action.DeviceActions
 import com.Lia.assistant.action.DeviceCommandParser
 import com.Lia.assistant.data.ApiKeyStore
+import com.Lia.assistant.data.ChatDisplayPreferences
+import com.Lia.assistant.data.ChatEngine
 import com.Lia.assistant.data.ChatHistoryMessage
 import com.Lia.assistant.data.ChatHistoryStore
+import com.Lia.assistant.data.ChatPrefill
 import com.Lia.assistant.data.ChatSession
+import com.Lia.assistant.data.DeviceTtsVoicePreferences
 import com.Lia.assistant.data.ElevenLabsStore
-import com.Lia.assistant.data.EnginePreferences
+import com.Lia.assistant.data.EnginePresetPreferences
 import com.Lia.assistant.data.FactMemoryStore
 import com.Lia.assistant.data.MemoryCapture
 import com.Lia.assistant.data.MemoryFact
@@ -81,9 +85,9 @@ import com.Lia.assistant.voice.ElevenLabsAudioPlayer
 import com.Lia.assistant.voice.ElevenLabsClient
 import com.Lia.assistant.voice.ElevenLabsResult
 import com.Lia.assistant.voice.GeminiTextClient
+import com.Lia.assistant.voice.LiaVoiceBeats
 import com.Lia.assistant.voice.NovaOrbState
 import com.Lia.assistant.voice.OfflineLlmClient
-import com.Lia.assistant.voice.OfflineModelManager
 import com.Lia.assistant.voice.PollinationsClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -243,7 +247,13 @@ fun ChatScreen(
             if (status == TextToSpeech.SUCCESS) {
                 // V12: the cute voice — a female system voice, a little
                 // higher and slower. No key, no network, works offline.
-                ttsInstance?.let { CuteVoice.applyCuteVoice(it) }
+                // V16 (P0-5): the user's picked device voice wins when set.
+                ttsInstance?.let {
+                    CuteVoice.applyCuteVoice(
+                        it,
+                        DeviceTtsVoicePreferences.getVoiceName(context)
+                    )
+                }
             }
         }
         tts = ttsInstance
@@ -447,18 +457,23 @@ fun ChatScreen(
         elevenNote = null
         scope.launch(Dispatchers.IO) {
             val apiKey = ApiKeyStore.getKey(context)
+            val preset = EnginePresetPreferences.getPreset(context)
+            // V16: Lia's own voice beats + the preset's style instruction.
             val systemInstruction = ChatPromptBuilder.build(
                 personality = appState.personality,
                 language = appState.language,
                 assistantName = appState.assistantName,
-                memoryBlock = FactMemoryStore.memoryBlock(context)
+                memoryBlock = FactMemoryStore.memoryBlock(context),
+                beats = LiaVoiceBeats.section(appState.personality, appState.userName),
+                presetInstruction = EnginePresetPreferences.instruction(preset)
             )
 
             val history = messages.map { ChatTurn(isUser = it.isUser, text = it.text) }
-            val useGemini = EnginePreferences.useGemini(context)
-            val useOffline = EnginePreferences.useOffline(context)
-            val fallbackEnabled = EnginePreferences.isOfflineFallbackEnabled(context)
-            val offlineReady = OfflineModelManager.isModelReady(context)
+            // V16 (P1-12): human-paced typing — the reply is fetched whole
+            // and typed out word by word at a human pace, instead of
+            // streaming in live.
+            val humanPaced = ChatDisplayPreferences.isHumanPacedTyping(context)
+            val engines = EnginePresetPreferences.resolveEngines(context)
 
             // The streaming placeholder: created on Main first, then
             // filled token by token as the reply arrives.
@@ -484,48 +499,73 @@ fun ChatScreen(
                 }
             }
 
-            var result: ChatReplyResult = if (useOffline) {
-                OfflineLlmClient.chat(
-                    context,
-                    systemInstruction,
-                    trimmed,
-                    onToken = { updatePlaceholder(it) }
-                )
-            } else if (useGemini) {
-                GeminiTextClient.reply(
-                    apiKey,
-                    systemInstruction,
-                    history,
-                    onRetrying = onRetrying
-                )
-            } else {
-                PollinationsClient.chatStream(
-                    systemInstruction,
-                    history,
-                    onToken = { updatePlaceholder(it) },
-                    onRetrying = onRetrying
-                )
-            }
-
-            // Fast offline fallback: the online engine is rate-limited
-            // or unreachable AND a verified model is on the phone — a
-            // quick offline reply beats a long silent wait. The header
-            // says so in plain language (retryNote, kept for this turn).
+            // V16 (P0-6): try the engines in preset order. A rate-limit /
+            // network error moves to the next engine; a hard error stops
+            // the chain. Falling back TO offline keeps the plain-language
+            // label (usedOfflineFallback, shown until the turn ends).
+            var result: ChatReplyResult = ChatReplyResult.Error(
+                "Koi engine available nahi — net check karo, ya Settings > " +
+                    "Offline AI se model download karo."
+            )
             var usedOfflineFallback = false
-            if (result is ChatReplyResult.Error &&
-                (result.isRateLimited || result.isNetworkError) &&
-                fallbackEnabled && offlineReady && !useOffline
-            ) {
-                usedOfflineFallback = true
-                scope.launch {
-                    retryNote = "Offline jawab — net slow tha, is liye phone se jawab de rahi hun."
+            for ((index, engine) in engines.withIndex()) {
+                val isLast = index == engines.lastIndex
+                val attempt: ChatReplyResult = when (engine) {
+                    ChatEngine.OFFLINE -> OfflineLlmClient.chat(
+                        context,
+                        systemInstruction,
+                        trimmed,
+                        onToken = if (humanPaced) {
+                            null
+                        } else {
+                            { text -> updatePlaceholder(text) }
+                        }
+                    )
+                    ChatEngine.GEMINI -> GeminiTextClient.reply(
+                        apiKey,
+                        systemInstruction,
+                        history,
+                        onRetrying = onRetrying
+                    )
+                    ChatEngine.POLLINATIONS -> if (humanPaced) {
+                        PollinationsClient.chat(
+                            systemInstruction,
+                            history,
+                            onRetrying = onRetrying
+                        )
+                    } else {
+                        PollinationsClient.chatStream(
+                            systemInstruction,
+                            history,
+                            onToken = { updatePlaceholder(it) },
+                            onRetrying = onRetrying
+                        )
+                    }
                 }
-                result = OfflineLlmClient.chat(
-                    context,
-                    systemInstruction,
-                    trimmed,
-                    onToken = { updatePlaceholder(it) }
-                )
+                when (attempt) {
+                    is ChatReplyResult.Success -> {
+                        result = attempt
+                        break
+                    }
+                    is ChatReplyResult.Error -> {
+                        result = attempt
+                        if ((attempt.isRateLimited || attempt.isNetworkError) && !isLast) {
+                            val nextEngine = engines[index + 1]
+                            if (nextEngine == ChatEngine.OFFLINE) {
+                                usedOfflineFallback = true
+                                scope.launch {
+                                    retryNote = "Offline jawab — net slow tha, is liye phone se jawab de rahi hun."
+                                }
+                            } else {
+                                scope.launch {
+                                    retryNote = "Thoda wait — doosre engine se try kar rahi hun…"
+                                }
+                            }
+                            continue
+                        }
+                        break
+                    }
+                }
             }
 
             withContext(Dispatchers.Main) {
@@ -538,7 +578,8 @@ fun ChatScreen(
                             if (messages[finalIdx].text.isBlank()) {
                                 // Non-streaming engine (Gemini): the
                                 // placeholder is still empty — keep the
-                                // old word-by-word reveal (20ms per word).
+                                // old word-by-word reveal. V16 (P1-12):
+                                // human-paced typing reveals at 90ms/word.
                                 val fullReply = result.text
                                 val words = fullReply.split(" ")
                                 scope.launch {
@@ -550,7 +591,7 @@ fun ChatScreen(
                                         if (idx != -1) {
                                             messages[idx] = messages[idx].copy(text = builder.toString())
                                         }
-                                        delay(20)
+                                        delay(if (humanPaced) 90 else 20)
                                     }
                                     val doneIdx = messages.indexOfFirst { it.id == placeholderId }
                                     if (doneIdx != -1) {
@@ -596,6 +637,15 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    // V16 (P0-1): the Home ask bar parks a question here; pick it up
+    // on entry and send it as a normal message. Placed after
+    // sendMessage is declared — a LaunchedEffect above it could not
+    // reference the local function.
+    LaunchedEffect(Unit) {
+        val prefill = ChatPrefill.take()
+        if (prefill != null) sendMessage(prefill)
     }
 
     Column(
