@@ -56,7 +56,6 @@ import com.Lia.assistant.ui.components.NovaInfoCard
 import com.Lia.assistant.ui.components.NovaTextField
 import com.Lia.assistant.ui.theme.LocalNovaColors
 import com.Lia.assistant.ui.theme.nightSky
-import com.Lia.assistant.voice.OfflineModelManager
 
 /**
  * V16 (P0-3) — first-run setup wizard, 3 steps.
@@ -322,7 +321,6 @@ private fun WizardEngineStep(
 
     var engine by remember { mutableStateOf(EnginePreferences.getEngine(context)) }
     var preset by remember { mutableStateOf(EnginePresetPreferences.getPreset(context)) }
-    val offlineReady = remember { OfflineModelManager.isModelReady(context) }
     val hasKey = remember { ApiKeyStore.hasKey(context) }
 
     Text(
@@ -334,8 +332,7 @@ private fun WizardEngineStep(
     Spacer(modifier = Modifier.height(6.dp))
     Text(
         text = "Kaun jawab de? Sab free hain — Pollinations ko koi key nahi " +
-            "chahiye, Offline phone par chalta hai, Gemini ko tumhari apni " +
-            "key chahiye.",
+            "chahiye, Gemini ko tumhari apni key chahiye.",
         fontSize = 14.sp,
         color = colors.textSecondary,
         lineHeight = 20.sp
@@ -347,12 +344,6 @@ private fun WizardEngineStep(
             ChatEngine.POLLINATIONS,
             "Pollinations — free, no key",
             "Online, app khulte hi kaam karta hai."
-        ),
-        Triple(
-            ChatEngine.OFFLINE,
-            "Offline — on this phone",
-            if (offlineReady) "Model downloaded — bina internet ke."
-            else "Model abhi download nahi hua — Settings > Offline AI."
         ),
         Triple(
             ChatEngine.GEMINI,
