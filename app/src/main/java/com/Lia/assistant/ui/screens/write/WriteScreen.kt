@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.navigation.NavController
 import com.Lia.assistant.data.ApiKeyStore
+import com.Lia.assistant.data.EnginePreferences
 import com.Lia.assistant.ui.components.NovaButton
 import com.Lia.assistant.ui.components.NovaButtonType
 import com.Lia.assistant.ui.components.NovaTextField
@@ -54,6 +55,7 @@ import com.Lia.assistant.ui.theme.nightSky
 import com.Lia.assistant.voice.ChatReplyResult
 import com.Lia.assistant.voice.ChatTurn
 import com.Lia.assistant.voice.GeminiTextClient
+import com.Lia.assistant.voice.PollinationsClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -101,7 +103,7 @@ fun WriteScreen(
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var savedFile by remember { mutableStateOf<File?>(null) }
 
-    val hasKey = ApiKeyStore.hasKey(context)
+    val useGemini = EnginePreferences.useGemini(context)
 
     fun generate() {
         val trimmed = topic.trim()
@@ -109,22 +111,28 @@ fun WriteScreen(
             errorMessage = "Please tell Lia what to write about."
             return
         }
-        if (!hasKey) {
-            errorMessage = "Gemini API key is missing. Please add it in Settings."
-            return
-        }
         isGenerating = true
         errorMessage = null
         statusMessage = null
         savedFile = null
         scope.launch(Dispatchers.IO) {
-            val apiKey = ApiKeyStore.getKey(context)
-            // Reuse the existing text client — no second text client.
-            val reply = GeminiTextClient.reply(
-                apiKey = apiKey,
-                systemInstruction = mode.systemInstruction,
-                history = listOf(ChatTurn(isUser = true, text = trimmed))
-            )
+            // V14: Write works free with no key (Pollinations, the default
+            // engine) — exactly like Chat. Gemini runs only when the user
+            // added a key AND picked Gemini in Settings. The old code
+            // refused to write at all without a key; that gate is gone.
+            val reply = if (useGemini) {
+                val apiKey = ApiKeyStore.getKey(context)
+                GeminiTextClient.reply(
+                    apiKey = apiKey,
+                    systemInstruction = mode.systemInstruction,
+                    history = listOf(ChatTurn(isUser = true, text = trimmed))
+                )
+            } else {
+                PollinationsClient.chat(
+                    systemInstruction = mode.systemInstruction,
+                    history = listOf(ChatTurn(isUser = true, text = trimmed))
+                )
+            }
             withContext(Dispatchers.Main) {
                 isGenerating = false
                 when (reply) {
@@ -209,8 +217,10 @@ fun WriteScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Missing-key card — honest, with a button to Settings.
-        if (!hasKey) {
+        // V14: Write is free with no key — no missing-key card any more.
+        // The engine note mirrors CreateImageScreen: Pollinations by
+        // default, Gemini only when the user picked it with a key.
+        if (!useGemini) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -219,21 +229,16 @@ fun WriteScreen(
                     .padding(16.dp)
             ) {
                 Text(
-                    text = "A Gemini API key is needed to write.",
+                    text = "Free writing — no key needed.",
                     fontSize = 15.sp,
                     color = colors.textPrimary
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Add your own free Gemini key in Settings — it is stored only on this phone.",
+                    text = "Lia writes with the free engine. Add a Gemini key in Settings " +
+                        "and pick Gemini only if you want its better quality.",
                     fontSize = 13.sp,
                     color = colors.textSecondary
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                NovaButton(
-                    text = "Open Settings",
-                    onClick = { navController.navigate("settings") },
-                    type = NovaButtonType.PRIMARY
                 )
             }
             Spacer(modifier = Modifier.height(16.dp))
@@ -283,7 +288,7 @@ fun WriteScreen(
             onClick = { generate() },
             type = NovaButtonType.PRIMARY,
             icon = Icons.Default.Edit,
-            enabled = !isGenerating && hasKey,
+            enabled = !isGenerating,
             modifier = Modifier.fillMaxWidth()
         )
 
