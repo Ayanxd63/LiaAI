@@ -21,3 +21,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "LiaAI"
 include(":app")
+// V15: vendored llama.cpp Android binding (see llama-lib/NOTICE.md).
+// The C++ sources are cloned by CI into llama.cpp/ at the repo root.
+include(":llama-lib")
