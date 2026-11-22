@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Mood
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Security
@@ -52,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.ElevenLabsStore
+import com.Lia.assistant.data.HuggingFaceStore
 import com.Lia.assistant.data.LanguagePreference
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.ui.components.AccessibilitySettingsRow
@@ -228,6 +230,17 @@ fun SettingsScreen(
                     },
                     icon = Icons.Default.RecordVoiceOver,
                     onClick = { navController.navigate("elevenlabs_settings") }
+                )
+                // v11: Hugging Face — free video needs your own free token.
+                NovaSettingsRow(
+                    title = "Hugging Face",
+                    subtitle = if (HuggingFaceStore.hasToken(context)) {
+                        "Connected — free video ready"
+                    } else {
+                        "Free video — token needed"
+                    },
+                    icon = Icons.Default.Movie,
+                    onClick = { navController.navigate("huggingface_settings") }
                 )
             }
         }
