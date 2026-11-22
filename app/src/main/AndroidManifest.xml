@@ -9,9 +9,39 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- v10: draw the home character bubble over other apps (user-granted). -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <!-- READ_CONTACTS and CALL_PHONE added back when Play Store version is ready -->
-    <!-- <uses-permission android:name="android.permission.READ_CONTACTS" /> -->
-    <!-- <uses-permission android:name="android.permission.CALL_PHONE" /> -->
+    <!-- V14: restart the always-listening service after a reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- V14: contacts + direct call (P1, guided setup in PermissionsScreen).
+         READ_CONTACTS lets "Ammi ko call karo" resolve a name; CALL_PHONE
+         lets Lia call directly without opening the dialer. Both are
+         dangerous runtime permissions — the user grants them in-app. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <!-- V14: Bluetooth enable dialog (runtime, Android 12+). -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- V14: package visibility for the apps Lia launches by name
+         (Play-safe: explicit packages + launcher intent, never
+         QUERY_ALL_PACKAGES, which stays direct-flavor-only). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.android.chrome" />
+        <package android:name="com.google.android.gm" />
+        <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.google.android.apps.photos" />
+        <package android:name="com.google.android.deskclock" />
+        <package android:name="com.android.vending" />
+        <package android:name="com.zhiliaoapp.musically" />
+        <package android:name="com.instagram.android" />
+        <package android:name="com.facebook.katana" />
+        <package android:name="com.spotify.music" />
+    </queries>
 
     <application
         android:name=".LiaApplication"
@@ -38,6 +68,30 @@
             android:name=".voice.VoiceForegroundService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <!-- V14: restart always-listening after a reboot (only when the
+             user turned it on; the receiver schedules the watchdog, which
+             is the Android 15-safe route). -->
+        <receiver
+            android:name=".voice.WakeWordBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- V14: read + reply to notifications (user-granted in Settings;
+             prominent in-app disclosure is shown BEFORE the system screen
+             opens — see PermissionsScreen). -->
+        <service
+            android:name=".notification.LiaNotificationListener"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <!-- v10: floating home-character bubble over other apps. -->
         <service
