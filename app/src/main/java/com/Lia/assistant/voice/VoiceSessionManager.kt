@@ -220,6 +220,7 @@ object VoiceSessionManager {
                         _state.value = NovaOrbState.LISTENING
                         _statusText.value = "Listening..."
                         _amplitude.value = 0f
+                        SpeechLevelTracker.reset()
                     }
                 }
             }
@@ -310,6 +311,7 @@ object VoiceSessionManager {
                 _state.value = NovaOrbState.LISTENING
                 _statusText.value = "Listening..."
                 _amplitude.value = 0f
+                SpeechLevelTracker.reset()
                 VoiceLatencyTracker.markTurnComplete()
             }
 
@@ -324,6 +326,7 @@ object VoiceSessionManager {
                 _state.value = NovaOrbState.LISTENING
                 _statusText.value = "Listening..."
                 _amplitude.value = 0f
+                SpeechLevelTracker.reset()
             }
 
             override fun onError(message: String) {
@@ -426,6 +429,7 @@ object VoiceSessionManager {
         _state.value = NovaOrbState.IDLE
         _statusText.value = "Ready to talk"
         _amplitude.value = 0f
+        SpeechLevelTracker.reset()
         _vadActive.value = false
         _muted.value = false
     }

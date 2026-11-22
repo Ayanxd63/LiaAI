@@ -229,7 +229,14 @@ class LiveAudioIO(
         if (pcmBytes.isEmpty()) return 0f
         val track = getOrCreateSpeaker()
         track.write(pcmBytes, 0, pcmBytes.size)
-        return calculateRms(pcmBytes)
+        val rms = calculateRms(pcmBytes)
+        // Lip-sync driver: this is the ONLY place assistant audio is
+        // played, and its only caller is VoiceSessionManager.onAudioChunk
+        // (Gemini Live voice). The chat screen's system TextToSpeech
+        // read-aloud never passes through here, so it never moves the
+        // character's mouth — lip sync is Gemini voice only, by design.
+        SpeechLevelTracker.update(rms)
+        return rms
     }
 
     fun flushPlayback() {

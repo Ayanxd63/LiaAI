@@ -1,6 +1,8 @@
 package com.Lia.assistant
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -11,12 +13,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import com.Lia.assistant.action.AppContext
+import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.license.AccessKeyManager
+import com.Lia.assistant.ui.character.AppVisibility
+import com.Lia.assistant.ui.character.FloatingCharacterService
 import com.Lia.assistant.ui.fx.ListeningEdgeGlow
 import com.Lia.assistant.ui.navigation.NovaApp
 import com.Lia.assistant.ui.screens.splash.LiaSplash3D
@@ -73,11 +79,24 @@ class MainActivity : ComponentActivity() {
         if (intent?.getBooleanExtra("EXTRA_OPEN_FORGE", false) == true) {
             ForgeController.requestOpen()
         }
+        if (intent?.getBooleanExtra(FloatingCharacterService.EXTRA_START_VOICE, false) == true) {
+            // Floating bubble tapped: start voice talk. Same guards as
+            // VoiceScreen — mic permission, API key, no active session.
+            // If any guard fails, just open the app: the user can tap
+            // Talk, and VoiceScreen will ask for what's missing.
+            val hasMic = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+            if (hasMic && ApiKeyStore.hasKey(this) && !VoiceSessionManager.isActive.value) {
+                VoiceForegroundService.start(this)
+            }
+        }
     }
 
     override fun onResume() {
         super.onResume()
         isInForeground = true
+        AppVisibility.setForeground(true)
         // Back in front: cancel any pending background stop.
         backgroundStopJob?.cancel()
         backgroundStopJob = null
@@ -92,6 +111,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         isInForeground = false
+        AppVisibility.setForeground(false)
         if (!VoiceSessionManager.isActive.value) return
 
         // Lia herself just launched an external app (YouTube, WhatsApp,
