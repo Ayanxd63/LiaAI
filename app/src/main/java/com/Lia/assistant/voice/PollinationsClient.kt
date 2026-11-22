@@ -76,11 +76,18 @@ object PollinationsClient {
      * primary model with backoff, then a short friendly error.
      * [onRetrying] is invoked on each retry (attempt number, 1-based) so
      * the UI can show a friendly "retrying..." state while waiting.
+     *
+     * V15 (fast replies): [retryDelaysMs] lets voice use shorter waits
+     * (1s/2s) than text chat; errors carry [ChatReplyResult.Error]
+     * flags so the caller can fall back to the offline engine at once
+     * on a rate-limit / network failure instead of waiting out the
+     * whole retry loop.
      */
     suspend fun chat(
         systemInstruction: String,
         history: List<ChatTurn>,
-        onRetrying: ((attempt: Int) -> Unit)? = null
+        onRetrying: ((attempt: Int) -> Unit)? = null,
+        retryDelaysMs: LongArray = RETRY_DELAYS_MS
     ): ChatReplyResult {
         if (history.isEmpty()) {
             return ChatReplyResult.Error("No conversation history provided.")
@@ -95,13 +102,64 @@ object PollinationsClient {
             lastOutcome = outcome
             if (attempt < MAX_ATTEMPTS - 1) {
                 onRetrying?.invoke(attempt + 1)
-                delay(RETRY_DELAYS_MS[attempt])
+                delay(retryDelaysMs.getOrElse(attempt) { RETRY_DELAYS_MS.last() })
             }
         }
 
         val busy = lastOutcome?.retryable == true
         return if (busy) {
-            ChatReplyResult.Error("Lia is very busy right now — please try again in a minute.")
+            ChatReplyResult.Error(
+                "Lia is very busy right now — please try again in a minute.",
+                isRateLimited = true
+            )
+        } else {
+            lastOutcome?.result
+                ?: ChatReplyResult.Error("Lia is very busy right now — please try again in a minute.")
+        }
+    }
+
+    /**
+     * V15 (fast replies) — the same chat turn, streamed: each token
+     * chunk is handed to [onToken] (accumulated text so far) as it
+     * arrives, so the UI shows the reply growing instead of waiting
+     * for the whole answer. The OpenAI-compatible endpoint answers
+     * Server-Sent Events when `"stream": true` is sent.
+     *
+     * A stream that dies mid-way with text already shown still counts
+     * as a (partial) success — a half reply beats an error. A failure
+     * before the first token retries exactly like [chat], and the final
+     * error carries the same fallback flags.
+     */
+    suspend fun chatStream(
+        systemInstruction: String,
+        history: List<ChatTurn>,
+        onToken: (String) -> Unit,
+        onRetrying: ((attempt: Int) -> Unit)? = null,
+        retryDelaysMs: LongArray = RETRY_DELAYS_MS
+    ): ChatReplyResult {
+        if (history.isEmpty()) {
+            return ChatReplyResult.Error("No conversation history provided.")
+        }
+
+        var lastOutcome: AttemptOutcome? = null
+        for (attempt in 0 until MAX_ATTEMPTS) {
+            val outcome = attemptChatStream(systemInstruction, history, onToken)
+            if (outcome.result is ChatReplyResult.Success || !outcome.retryable) {
+                return outcome.result
+            }
+            lastOutcome = outcome
+            if (attempt < MAX_ATTEMPTS - 1) {
+                onRetrying?.invoke(attempt + 1)
+                delay(retryDelaysMs.getOrElse(attempt) { RETRY_DELAYS_MS.last() })
+            }
+        }
+
+        val busy = lastOutcome?.retryable == true
+        return if (busy) {
+            ChatReplyResult.Error(
+                "Lia is very busy right now — please try again in a minute.",
+                isRateLimited = true
+            )
         } else {
             lastOutcome?.result
                 ?: ChatReplyResult.Error("Lia is very busy right now — please try again in a minute.")
@@ -113,28 +171,7 @@ object PollinationsClient {
         systemInstruction: String,
         history: List<ChatTurn>
     ): AttemptOutcome {
-        val messagesArray = JSONArray()
-        messagesArray.put(JSONObject().apply {
-            put("role", "system")
-            put("content", systemInstruction)
-        })
-        for (turn in history) {
-            messagesArray.put(JSONObject().apply {
-                put("role", if (turn.isUser) "user" else "assistant")
-                put("content", turn.text)
-            })
-        }
-        val root = JSONObject().apply {
-            put("model", TEXT_MODEL)
-            put("messages", messagesArray)
-            put("max_tokens", 800)
-        }
-
-        val mediaType = "application/json; charset=utf-8".toMediaType()
-        val request = Request.Builder()
-            .url(TEXT_URL)
-            .post(root.toString().toRequestBody(mediaType))
-            .build()
+        val request = buildChatRequest(systemInstruction, history, stream = false)
 
         try {
             httpClient.newCall(request).execute().use { response ->
@@ -145,7 +182,13 @@ object PollinationsClient {
                         JSONObject(errorBody).optJSONObject("error")?.optString("message", "")
                     }.getOrNull().ifNullOrBlank { "HTTP error $code" }
                     val retryable = code == 503 || code == 429 || isOverloadMessage(reason)
-                    return AttemptOutcome(ChatReplyResult.Error(friendlyChatError(code, reason)), retryable)
+                    return AttemptOutcome(
+                        ChatReplyResult.Error(
+                            friendlyChatError(code, reason),
+                            isRateLimited = retryable
+                        ),
+                        retryable
+                    )
                 }
 
                 val body = response.body?.string() ?: ""
@@ -166,7 +209,10 @@ object PollinationsClient {
             }
         } catch (e: IOException) {
             return AttemptOutcome(
-                ChatReplyResult.Error("Couldn't reach the free AI. Please check your internet connection."),
+                ChatReplyResult.Error(
+                    "Couldn't reach the free AI. Please check your internet connection.",
+                    isNetworkError = true
+                ),
                 true
             )
         } catch (e: Exception) {
@@ -175,6 +221,144 @@ object PollinationsClient {
                 false
             )
         }
+    }
+
+    /** One streamed (SSE) chat-completions call to the Classic API. */
+    private fun attemptChatStream(
+        systemInstruction: String,
+        history: List<ChatTurn>,
+        onToken: (String) -> Unit
+    ): AttemptOutcome {
+        val request = buildChatRequest(systemInstruction, history, stream = true)
+        var streamedText = ""
+        try {
+            httpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    val errorBody = response.body?.string() ?: ""
+                    val reason = runCatching {
+                        JSONObject(errorBody).optJSONObject("error")?.optString("message", "")
+                    }.getOrNull().ifNullOrBlank { "HTTP error $code" }
+                    val retryable = code == 503 || code == 429 || isOverloadMessage(reason)
+                    return AttemptOutcome(
+                        ChatReplyResult.Error(
+                            friendlyChatError(code, reason),
+                            isRateLimited = retryable
+                        ),
+                        retryable
+                    )
+                }
+
+                val body = response.body
+                    ?: return AttemptOutcome(
+                        ChatReplyResult.Error("The model returned an empty response."),
+                        false
+                    )
+                val accumulated = StringBuilder()
+                val rawText = StringBuilder()
+                var sawSseData = false
+                body.byteStream().bufferedReader().useLines { lines ->
+                    for (line in lines) {
+                        val data = line.trim()
+                        if (!data.startsWith("data:")) {
+                            // Not an SSE line: keep it in case the server
+                            // answered with plain JSON instead of a stream.
+                            rawText.append(line).append('\n')
+                            continue
+                        }
+                        sawSseData = true
+                        val payload = data.removePrefix("data:").trim()
+                        if (payload == "[DONE]") break
+                        val content = runCatching {
+                            JSONObject(payload)
+                                .optJSONArray("choices")
+                                ?.optJSONObject(0)
+                                ?.optJSONObject("delta")
+                                ?.optString("content", "")
+                        }.getOrDefault("") ?: ""
+                        if (content.isNotEmpty()) {
+                            accumulated.append(content)
+                            streamedText = accumulated.toString()
+                            onToken(streamedText)
+                        }
+                    }
+                }
+                // The endpoint ignored "stream": true and answered with
+                // plain JSON (one shot) — parse that instead of failing.
+                if (accumulated.isEmpty() && !sawSseData && rawText.isNotBlank()) {
+                    val fallbackText = runCatching {
+                        JSONObject(rawText.toString())
+                            .optJSONArray("choices")
+                            ?.optJSONObject(0)
+                            ?.optJSONObject("message")
+                            ?.optString("content", "")
+                    }.getOrDefault("") ?: ""
+                    if (fallbackText.isNotBlank()) {
+                        streamedText = fallbackText.trim()
+                        onToken(streamedText)
+                        return AttemptOutcome(ChatReplyResult.Success(streamedText), false)
+                    }
+                }
+                val text = accumulated.toString().trim()
+                return if (text.isNotBlank()) {
+                    AttemptOutcome(ChatReplyResult.Success(text), false)
+                } else {
+                    AttemptOutcome(ChatReplyResult.Error("The model returned an empty reply."), false)
+                }
+            }
+        } catch (e: IOException) {
+            // Mid-stream drop after text already arrived: keep the
+            // partial reply instead of showing an error.
+            if (streamedText.isNotBlank()) {
+                return AttemptOutcome(ChatReplyResult.Success(streamedText.trim()), false)
+            }
+            return AttemptOutcome(
+                ChatReplyResult.Error(
+                    "Couldn't reach the free AI. Please check your internet connection.",
+                    isNetworkError = true
+                ),
+                true
+            )
+        } catch (e: Exception) {
+            if (streamedText.isNotBlank()) {
+                return AttemptOutcome(ChatReplyResult.Success(streamedText.trim()), false)
+            }
+            return AttemptOutcome(
+                ChatReplyResult.Error("Failed to talk to the free AI: ${e.localizedMessage ?: "Unknown error"}"),
+                false
+            )
+        }
+    }
+
+    /** Shared request builder for the chat and streamed-chat calls. */
+    private fun buildChatRequest(
+        systemInstruction: String,
+        history: List<ChatTurn>,
+        stream: Boolean
+    ): Request {
+        val messagesArray = JSONArray()
+        messagesArray.put(JSONObject().apply {
+            put("role", "system")
+            put("content", systemInstruction)
+        })
+        for (turn in history) {
+            messagesArray.put(JSONObject().apply {
+                put("role", if (turn.isUser) "user" else "assistant")
+                put("content", turn.text)
+            })
+        }
+        val root = JSONObject().apply {
+            put("model", TEXT_MODEL)
+            put("messages", messagesArray)
+            put("max_tokens", 800)
+            if (stream) put("stream", true)
+        }
+
+        val mediaType = "application/json; charset=utf-8".toMediaType()
+        return Request.Builder()
+            .url(TEXT_URL)
+            .post(root.toString().toRequestBody(mediaType))
+            .build()
     }
 
     /** True when an error message means "overloaded / try again later". */
