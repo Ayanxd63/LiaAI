@@ -115,6 +115,18 @@ dependencies {
     // (see .github/workflows/android.yml and llama-lib/NOTICE.md).
     implementation(project(":llama-lib"))
 
+    // V17: on-device voice engine — sherpa-onnx 2.0.3 (Apache-2.0).
+    // It is NOT on Maven Central, so there is no Maven coordinate to
+    // pin: CI downloads the release tarball + JVM jar (SHA-256
+    // checked) and places the native libs in app/src/main/jniLibs and
+    // the jar in app/libs (see .github/workflows/android.yml). A local
+    // build without that step fails on the missing jar file — build on
+    // GitHub Actions, like V15's first builds.
+    implementation(files("libs/sherpa-onnx-jvm-2.0.3.jar"))
+    // V17: on-device memory embeddings — TensorFlow Lite (MiniLM-L6-v2).
+    // 2.17.0 is the latest on Maven Central (verified 2026-11-22).
+    implementation("org.tensorflow:tensorflow-lite:2.17.0")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("org.json:json:20240303")
