@@ -1,6 +1,8 @@
 package com.Lia.assistant
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -11,12 +13,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import com.Lia.assistant.action.AppContext
+import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.NovaAppState
+import com.Lia.assistant.data.VoicePlaybackSettings
 import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.license.AccessKeyManager
+import com.Lia.assistant.ui.character.AppVisibility
+import com.Lia.assistant.ui.character.FloatingCharacterService
 import com.Lia.assistant.ui.fx.ListeningEdgeGlow
 import com.Lia.assistant.ui.navigation.NovaApp
 import com.Lia.assistant.ui.screens.splash.LiaSplash3D
@@ -29,6 +36,19 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        /**
+         * v10 listen-on-open guard. Process-level (a companion field, NOT
+         * an instance field) so activity re-creation on rotation cannot
+         * auto-start a second session — the flag survives rotation in the
+         * same process. Set the first time onResume evaluates the setting,
+         * whether or not a session starts, so a user who stops the session
+         * manually is never auto-restarted just by returning to the app;
+         * the next app launch (new process) evaluates it again.
+         */
+        private var listenOnOpenAttempted = false
+    }
 
     private lateinit var appState: NovaAppState
 
@@ -73,11 +93,24 @@ class MainActivity : ComponentActivity() {
         if (intent?.getBooleanExtra("EXTRA_OPEN_FORGE", false) == true) {
             ForgeController.requestOpen()
         }
+        if (intent?.getBooleanExtra(FloatingCharacterService.EXTRA_START_VOICE, false) == true) {
+            // Floating bubble tapped: start voice talk. Same guards as
+            // VoiceScreen — mic permission, API key, no active session.
+            // If any guard fails, just open the app: the user can tap
+            // Talk, and VoiceScreen will ask for what's missing.
+            val hasMic = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+            if (hasMic && ApiKeyStore.hasKey(this) && !VoiceSessionManager.isActive.value) {
+                VoiceForegroundService.start(this)
+            }
+        }
     }
 
     override fun onResume() {
         super.onResume()
         isInForeground = true
+        AppVisibility.setForeground(true)
         // Back in front: cancel any pending background stop.
         backgroundStopJob?.cancel()
         backgroundStopJob = null
@@ -87,11 +120,56 @@ class MainActivity : ComponentActivity() {
                 VoiceForegroundService.stop(this@MainActivity)
             }
         }
+        maybeStartListeningOnOpen()
+    }
+
+    /**
+     * v10 "Listen when the app opens" (VoicePlaybackSettings.listenOnOpen).
+     * Runs on every onResume — which covers the app opening — but only
+     * ever acts once per process (see [listenOnOpenAttempted]).
+     *
+     * Starts a session only when ALL of these hold:
+     * - listen-on-open is enabled in Voice & language settings, and
+     * - no voice session is already active, and
+     * - microphone permission is already granted, and
+     * - a Gemini API key is configured (same gate as VoiceScreen's
+     *   auto-start, so a missing key never spawns a pointless error
+     *   session).
+     *
+     * If microphone permission is NOT granted, does nothing at all: no
+     * crash, no permission dialog here — the existing permission flow in
+     * VoiceScreen / PermissionsScreen handles granting.
+     *
+     * Reuses the Talk button's start path exactly: the Talk button
+     * navigates to the Voice screen, whose LaunchedEffect calls
+     * VoiceForegroundService.start(context); that service calls
+     * VoiceSessionManager.start(). No new session mechanism is invented.
+     * The session runs in the foreground service behind the home screen;
+     * the home orb already observes VoiceSessionManager.state, and the
+     * user can tap the orb / Talk button to open the Voice screen.
+     * It does NOT navigate anywhere by itself (MainActivity owns no
+     * NavController — navigation lives in NovaApp).
+     */
+    private fun maybeStartListeningOnOpen() {
+        if (listenOnOpenAttempted) return
+        listenOnOpenAttempted = true
+        if (!VoicePlaybackSettings.isListenOnOpen(this)) return
+        if (VoiceSessionManager.isActive.value) return
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        if (!ApiKeyStore.hasKey(this)) return
+        VoiceForegroundService.start(this)
     }
 
     override fun onStop() {
         super.onStop()
         isInForeground = false
+        AppVisibility.setForeground(false)
         if (!VoiceSessionManager.isActive.value) return
 
         // Lia herself just launched an external app (YouTube, WhatsApp,
