@@ -12,7 +12,13 @@ object ChatPromptBuilder {
         // V15: long-term memory — the "Things I remember about you:"
         // block (top 10 facts, <= 800 chars). Empty when memory is off
         // or there are no facts; callers pass FactMemoryStore.memoryBlock.
-        memoryBlock: String? = null
+        memoryBlock: String? = null,
+        // V16 (P1-7): Lia's own voice beats (pet-name ladder, short
+        // replies, owning mistakes). Empty when the caller has none.
+        beats: String? = null,
+        // V16 (P0-6): the engine preset's style instruction
+        // (Fast/Warm/Smart). Empty when no preset is active.
+        presetInstruction: String? = null
     ): String {
         val sections = mutableListOf<String>()
 
@@ -21,6 +27,16 @@ object ChatPromptBuilder {
         )
 
         sections.add(personality.systemInstruction)
+
+        // V16: Lia's own voice beats — how she talks.
+        if (!beats.isNullOrBlank()) {
+            sections.add(beats)
+        }
+
+        // V16: engine preset style (Fast/Warm/Smart).
+        if (!presetInstruction.isNullOrBlank()) {
+            sections.add(presetInstruction)
+        }
 
         // V15: long-term memory — facts Lia remembers about the user.
         // Injected for every engine (online and offline alike).

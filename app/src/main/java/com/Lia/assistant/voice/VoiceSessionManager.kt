@@ -21,11 +21,15 @@ import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.ChatHistoryMessage
 import com.Lia.assistant.data.ChatHistoryStore
 import com.Lia.assistant.data.ChatSession
+import com.Lia.assistant.data.DeviceTtsVoicePreferences
 import com.Lia.assistant.data.EnginePreferences
+import com.Lia.assistant.data.EnginePreset
+import com.Lia.assistant.data.EnginePresetPreferences
 import com.Lia.assistant.data.FactMemoryStore
 import com.Lia.assistant.data.LanguagePreference
 import com.Lia.assistant.data.MemoryCapture
 import com.Lia.assistant.data.MemoryFact
+import com.Lia.assistant.data.NovaPreferences
 import com.Lia.assistant.data.Personality
 import com.Lia.assistant.data.PersonalityRepository
 import com.Lia.assistant.forge.ForgeController
@@ -104,6 +108,21 @@ object VoiceSessionManager {
 
     private val _state = MutableStateFlow(NovaOrbState.IDLE)
     val state: StateFlow<NovaOrbState> = _state.asStateFlow()
+
+    // V16 (APK-delta addition): the explicit turn state machine —
+    // see VoiceTurnState. It mirrors the orb state but tracks the
+    // conversation TURN (listening -> speech -> end-of-speech ->
+    // thinking -> speaking), so the overlay and the debugger can show
+    // exactly where a turn is stuck instead of just "thinking".
+    private val _turnState = MutableStateFlow(VoiceTurnState.IDLE)
+    val turnState: StateFlow<VoiceTurnState> = _turnState.asStateFlow()
+
+    private fun setTurnState(next: VoiceTurnState) {
+        if (_turnState.value != next) {
+            Log.d(TAG, "Turn: ${_turnState.value} -> $next")
+            _turnState.value = next
+        }
+    }
 
     private val _amplitude = MutableStateFlow(0f)
     val amplitude: StateFlow<Float> = _amplitude.asStateFlow()
@@ -288,10 +307,16 @@ object VoiceSessionManager {
 
         // System TTS, cute voice (female voice, pitch 1.2, rate 0.95).
         // No key, no network — works offline on every phone.
+        // V16 (P0-5): the user's picked device voice wins when set.
         noKeyTts = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 noKeyTtsReady = true
-                noKeyTts?.let { CuteVoice.applyCuteVoice(it) }
+                noKeyTts?.let {
+                    CuteVoice.applyCuteVoice(
+                        it,
+                        DeviceTtsVoicePreferences.getVoiceName(context)
+                    )
+                }
             }
         }
 
@@ -370,11 +395,13 @@ object VoiceSessionManager {
     private val noKeyRecognitionListener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
             _state.value = NovaOrbState.LISTENING
+            setTurnState(VoiceTurnState.LISTENING)
         }
 
         override fun onBeginningOfSpeech() {
             _state.value = NovaOrbState.LISTENING
             _statusText.value = "Sun rahi hun…"
+            setTurnState(VoiceTurnState.SPEECH_DETECTED)
         }
 
         override fun onRmsChanged(rmsdB: Float) {
@@ -387,8 +414,11 @@ object VoiceSessionManager {
             noKeyListening = false
             _state.value = NovaOrbState.THINKING
             _statusText.value = "Soch rahi hun…"
-            // V15: arm the watchdog — if no reply ever comes back, the
-            // overlay recovers on its own instead of hanging here.
+            // V16: the turn boundary — the user stopped speaking.
+            // The watchdog is armed HERE, from end-of-speech, so a
+            // lost result is caught at the turn boundary, not from a
+            // timer started when listening began.
+            setTurnState(VoiceTurnState.END_OF_SPEECH)
             armThinkingWatchdog()
         }
 
@@ -399,15 +429,20 @@ object VoiceSessionManager {
             when (error) {
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
                     _state.value = NovaOrbState.ERROR
+                    setTurnState(VoiceTurnState.ERROR)
                     _statusText.value = "Microphone permission chahiye — Settings se allow karo."
                     _lastError.value = "Microphone permission missing"
                 }
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
                     // Quiet room — listen again after a short pause.
+                    setTurnState(VoiceTurnState.IDLE)
                     scheduleNoKeyRestart(1_500L)
                 }
-                else -> scheduleNoKeyRestart(800L)
+                else -> {
+                    setTurnState(VoiceTurnState.IDLE)
+                    scheduleNoKeyRestart(800L)
+                }
             }
         }
 
@@ -445,6 +480,9 @@ object VoiceSessionManager {
         }
         _state.value = NovaOrbState.THINKING
         _statusText.value = "Soch rahi hun…"
+        // V16: the transcript arrived — the turn moves from
+        // END_OF_SPEECH to THINKING.
+        setTurnState(VoiceTurnState.THINKING)
         armThinkingWatchdog()
 
         // V15: long-term memory — same rules as text chat, spoken.
@@ -525,14 +563,28 @@ object VoiceSessionManager {
                     detectedLanguage = _detectedLanguage.value,
                     recap = ConversationMemory.recap(),
                     assistantName = assistantName,
-                    memoryBlock = FactMemoryStore.memoryBlock(ctx)
+                    memoryBlock = FactMemoryStore.memoryBlock(ctx),
+                    // V16 (P1-7): Lia's own voice beats.
+                    beats = LiaVoiceBeats.section(
+                        personality,
+                        NovaPreferences.getString(
+                            ctx,
+                            NovaPreferences.Keys.USER_NAME,
+                            "Friend"
+                        )
+                    )
                 )
                 val history = ConversationMemory.snapshot().map { turn ->
                     ChatTurn(isUser = turn.role == MemoryRole.USER, text = turn.text)
                 }
-                val useOffline = EnginePreferences.useOffline(ctx)
-                val fallbackEnabled = EnginePreferences.isOfflineFallbackEnabled(ctx)
+                // V16 (P0-6): the Fast preset answers offline first when a
+                // model is on the phone (no network wait); other presets
+                // keep the chosen engine, with the usual offline fallback.
                 val offlineReady = OfflineModelManager.isModelReady(ctx)
+                val useOffline = EnginePreferences.useOffline(ctx) ||
+                    (EnginePresetPreferences.getPreset(ctx) == EnginePreset.FAST &&
+                        offlineReady)
+                val fallbackEnabled = EnginePreferences.isOfflineFallbackEnabled(ctx)
 
                 // 20s deadline for the whole round-trip: a hung request
                 // must never wedge the overlay (V14 bug #2).
@@ -613,11 +665,13 @@ object VoiceSessionManager {
             // TTS cannot speak: show the reply so it is not lost.
             _statusText.value = text.take(200)
             _state.value = NovaOrbState.LISTENING
+            setTurnState(VoiceTurnState.LISTENING)
             onDone?.invoke()
             return
         }
         noKeySpeaking = true
         _state.value = NovaOrbState.SPEAKING
+        setTurnState(VoiceTurnState.SPEAKING)
         _statusText.value = "Lia bol rahi hai…"
         _amplitude.value = 0.4f
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -627,12 +681,14 @@ object VoiceSessionManager {
                 noKeySpeaking = false
                 _amplitude.value = 0f
                 _state.value = NovaOrbState.LISTENING
+                setTurnState(VoiceTurnState.LISTENING)
                 onDone?.invoke()
             }
 
             override fun onError(utteranceId: String?) {
                 noKeySpeaking = false
                 _amplitude.value = 0f
+                setTurnState(VoiceTurnState.LISTENING)
                 onDone?.invoke()
             }
         })
@@ -650,6 +706,7 @@ object VoiceSessionManager {
             _amplitude.value = 0f
             _statusText.value = text.take(200)
             _state.value = NovaOrbState.LISTENING
+            setTurnState(VoiceTurnState.LISTENING)
             onDone?.invoke()
         }
     }
@@ -689,7 +746,16 @@ object VoiceSessionManager {
             recap = recap,
             assistantName = assistantName,
             // V15: long-term memory, same block as the no-key path.
-            memoryBlock = FactMemoryStore.memoryBlock(currentContext)
+            memoryBlock = FactMemoryStore.memoryBlock(currentContext),
+            // V16 (P1-7): Lia's own voice beats.
+            beats = LiaVoiceBeats.section(
+                personality,
+                NovaPreferences.getString(
+                    currentContext,
+                    NovaPreferences.Keys.USER_NAME,
+                    "Friend"
+                )
+            )
         )
 
         val liveListener = object : GeminiLiveClient.Listener {
@@ -711,6 +777,7 @@ object VoiceSessionManager {
                 }
 
                 _state.value = NovaOrbState.SPEAKING
+                setTurnState(VoiceTurnState.SPEAKING)
                 _statusText.value = "$assistantName is speaking..."
                 val amp = audioIO?.playChunk(bytes) ?: 0f
                 _amplitude.value = amp
@@ -723,6 +790,7 @@ object VoiceSessionManager {
                         isTurnActive = false
                         EchoGuard.notifyPlaybackStopped()
                         _state.value = NovaOrbState.LISTENING
+                        setTurnState(VoiceTurnState.LISTENING)
                         _statusText.value = "Listening..."
                         _amplitude.value = 0f
                         SpeechLevelTracker.reset()
@@ -976,6 +1044,7 @@ object VoiceSessionManager {
 
         isTurnActive = false
         _state.value = NovaOrbState.IDLE
+        setTurnState(VoiceTurnState.IDLE)
         _statusText.value = "Ready to talk"
         _amplitude.value = 0f
         SpeechLevelTracker.reset()
