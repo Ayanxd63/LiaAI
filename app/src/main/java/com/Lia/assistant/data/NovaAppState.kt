@@ -109,8 +109,24 @@ class NovaAppState(context: Context) {
     // V13: persisted chat history. Loaded once from ChatHistoryStore
     // (SharedPreferences JSON) so past chats survive app restarts. The
     // list is newest first; the store caps at 30 chats.
-    val conversations = mutableStateListOf<ConversationItem>().apply {
-        addAll(ChatHistoryStore.loadSessions(context).map { it.toItem() })
+    // V15: the JSON load runs on IO, not in the initializer, so app
+    // start never stutters on a big history file — the list fills in
+    // just after launch.
+    val conversations = mutableStateListOf<ConversationItem>()
+
+    init {
+        ioScope.launch {
+            val sessions = runCatching { ChatHistoryStore.loadSessions(context) }
+                .getOrDefault(emptyList())
+            // V15: seed the voice short-term memory from the latest
+            // saved session, so the first voice turn already knows
+            // what was said before the app restarted.
+            val latest = sessions.firstOrNull()
+            if (latest != null && latest.messages.isNotEmpty()) {
+                com.Lia.assistant.voice.ConversationMemory.seedFromSession(latest.messages)
+            }
+            conversations.addAll(sessions.map { it.toItem() })
+        }
     }
 
     /** Save (insert or replace) one chat session, newest first. */
