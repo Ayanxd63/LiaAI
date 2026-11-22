@@ -22,14 +22,20 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Animation
+import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Mood
 import androidx.compose.material.icons.filled.OfflineBolt
@@ -61,15 +67,22 @@ import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.Lia.assistant.data.AlwaysListeningPreferences
 import com.Lia.assistant.data.ApiKeyStore
+import com.Lia.assistant.data.ChatDisplayPreferences
 import com.Lia.assistant.data.ChatEngine
+import com.Lia.assistant.data.CrashReportStore
 import com.Lia.assistant.data.ElevenLabsStore
 import com.Lia.assistant.data.EnginePreferences
+import com.Lia.assistant.data.EnginePreset
+import com.Lia.assistant.data.EnginePresetPreferences
 import com.Lia.assistant.data.FactMemoryStore
 import com.Lia.assistant.data.LanguagePreference
 import com.Lia.assistant.data.NovaAppState
+import com.Lia.assistant.data.SkillsStore
+import com.Lia.assistant.notification.WhatsAppArrivalAlerts
 import com.Lia.assistant.ui.components.AccessibilitySettingsRow
 import com.Lia.assistant.ui.components.NovaButton
 import com.Lia.assistant.ui.components.NovaButtonType
+import com.Lia.assistant.ui.components.NovaChipRow
 import com.Lia.assistant.ui.components.NovaGlassCard
 import com.Lia.assistant.ui.components.NovaSectionHeader
 import com.Lia.assistant.ui.components.NovaSettingsRow
@@ -120,6 +133,17 @@ fun SettingsScreen(
 
     var showNameDialog by remember { mutableStateOf(false) }
     var nameInput by remember { mutableStateOf(appState.assistantName) }
+
+    // V16: engine preset (Fast/Warm/Smart), human-paced typing,
+    // WhatsApp arrival alerts, accent. Local state mirrors the stored
+    // value so the row subtitle updates the moment the user taps it.
+    var preset by remember { mutableStateOf(EnginePresetPreferences.getPreset(context)) }
+    var humanPaced by remember {
+        mutableStateOf(ChatDisplayPreferences.isHumanPacedTyping(context))
+    }
+    var whatsappAlertsOn by remember {
+        mutableStateOf(WhatsAppArrivalAlerts.isEnabled(context))
+    }
 
     // V14: always-listening ("Hey Lia") state. The toggle is OFF by
     // default; turning it on downloads the small on-device voice model
@@ -289,6 +313,23 @@ fun SettingsScreen(
                     icon = Icons.Default.Star,
                     onClick = { showEngineDialog = true }
                 )
+                // V16 (P0-6): engine preset — Fast / Warm / Smart. Tap
+                // to cycle; the preset drives the fallback order and the
+                // reply style (see EnginePresets.kt).
+                NovaSettingsRow(
+                    title = "Engine preset",
+                    subtitle = "${preset.displayName} — ${preset.tagline}",
+                    icon = Icons.Default.Speed,
+                    onClick = {
+                        val next = when (preset) {
+                            EnginePreset.FAST -> EnginePreset.WARM
+                            EnginePreset.WARM -> EnginePreset.SMART
+                            EnginePreset.SMART -> EnginePreset.FAST
+                        }
+                        EnginePresetPreferences.setPreset(context, next)
+                        preset = next
+                    }
+                )
                 // V15: offline AI — download / delete the on-device model
                 // (Wi-Fi only, ~0.5 GB, never inside the APK).
                 NovaSettingsRow(
@@ -316,6 +357,23 @@ fun SettingsScreen(
                     onCheckedChange = { checked ->
                         EnginePreferences.setOfflineFallbackEnabled(context, checked)
                         offlineFallbackOn = checked
+                    }
+                )
+                // V16 (P1-12): human-paced typing — replies type out word
+                // by word at a human pace (90ms/word) instead of streaming
+                // in live. Default OFF.
+                NovaSettingsRow(
+                    title = "Human-paced typing",
+                    subtitle = if (humanPaced) {
+                        "On — replies type out like a person"
+                    } else {
+                        "Off — replies stream in live"
+                    },
+                    icon = Icons.Default.Speed,
+                    switch = humanPaced,
+                    onCheckedChange = { checked ->
+                        ChatDisplayPreferences.setHumanPacedTyping(context, checked)
+                        humanPaced = checked
                     }
                 )
                 // V15: long-term memory — what Lia remembers about you.
@@ -360,20 +418,15 @@ fun SettingsScreen(
                         appState.applyLanguage(context, nextLang)
                     }
                 )
+                // V16 (P0-5): the voice picker — device TTS voices
+                // (real, previewable, no key) and Gemini Live voice names
+                // (key-only). Replaces the old cycle-through-names row:
+                // the Appetize tester could never see the list.
                 NovaSettingsRow(
-                    title = "Gemini Voice",
-                    subtitle = appState.voiceName,
+                    title = "Voice picker",
+                    subtitle = "Device voices + Gemini Live voices — ${appState.voiceName}",
                     icon = Icons.Default.RecordVoiceOver,
-                    onClick = {
-                        val nextVoice = when (appState.voiceName) {
-                            "Aoede" -> "Puck"
-                            "Puck" -> "Charon"
-                            "Charon" -> "Kore"
-                            "Kore" -> "Fenrir"
-                            else -> "Aoede"
-                        }
-                        appState.applyVoiceName(context, nextVoice)
-                    }
+                    onClick = { navController.navigate("voice_picker") }
                 )
                 // v10: Voice & language — speech speed, voice volume, listen on open.
                 NovaSettingsRow(
@@ -513,6 +566,25 @@ fun SettingsScreen(
                     switch = appState.reducedMotion,
                     onCheckedChange = { appState.applyReducedMotion(context, it) }
                 )
+                // V16 (P1-11): accent picker — Rose is the default (the
+                // V13 warm theme); Blue / Purple recolour the accent.
+                Text(
+                    text = "Accent colour",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colors.textPrimary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                NovaChipRow(
+                    chips = listOf("Rose", "Blue", "Purple").map {
+                        it to (appState.accent == it.uppercase())
+                    },
+                    onChipClick = { index ->
+                        val picked = listOf("ROSE", "BLUE", "PURPLE")[index]
+                        appState.applyAccent(context, picked)
+                    },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
             }
         }
 
@@ -540,6 +612,116 @@ fun SettingsScreen(
                 )
                 // Flavor-specific Accessibility Row (active in direct, stub in play)
                 AccessibilitySettingsRow()
+            }
+        }
+
+        // V16: Lia's extras — the new screens, one hub section.
+        NovaSectionHeader(title = "Lia's extras (V16)")
+        NovaGlassCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            elevation = 4.dp
+        ) {
+            Column {
+                NovaSettingsRow(
+                    title = "Setup wizard",
+                    subtitle = "Permissions, engine, persona — dobara chalao",
+                    icon = Icons.Default.Build,
+                    onClick = { navController.navigate("setup_wizard") }
+                )
+                NovaSettingsRow(
+                    title = "Skills",
+                    subtitle = "${SkillsStore.installedCount(context)} / 6 installed — Morning Briefing, Study Helper, Music DJ, Journal, Reminder, Translator",
+                    icon = Icons.Default.Star,
+                    onClick = { navController.navigate("skills") }
+                )
+                NovaSettingsRow(
+                    title = "Actions",
+                    subtitle = "Phone par Lia kya kar sakti hai — poori list, tap karo to chalega",
+                    icon = Icons.Default.List,
+                    onClick = { navController.navigate("actions") }
+                )
+                NovaSettingsRow(
+                    title = "Sub-agents",
+                    subtitle = "Research, Story, Song list — dated files banate hain",
+                    icon = Icons.Default.Info,
+                    onClick = { navController.navigate("sub_agents") }
+                )
+                NovaSettingsRow(
+                    title = "Backup",
+                    subtitle = "Ek JSON file: chats + facts + reminders (koi key nahi)",
+                    icon = Icons.Default.Backup,
+                    onClick = { navController.navigate("backup") }
+                )
+                NovaSettingsRow(
+                    title = "Crash reports",
+                    subtitle = if (CrashReportStore.all(context).isEmpty()) {
+                        "Lia abhi tak kabhi crash nahi hui"
+                    } else {
+                        "${CrashReportStore.all(context).size} report(s) — tap to view or share"
+                    },
+                    icon = Icons.Default.BugReport,
+                    onClick = { navController.navigate("crash_report") }
+                )
+                NovaSettingsRow(
+                    title = "Voice enrolment (Hey Lia)",
+                    subtitle = "3 phrases bol kar apni awaz enrol karo — biometric NAHI hai",
+                    icon = Icons.Default.RecordVoiceOver,
+                    onClick = { navController.navigate("voice_enrolment") }
+                )
+                NovaSettingsRow(
+                    title = "WhatsApp arrival alerts",
+                    subtitle = if (whatsappAlertsOn) {
+                        "On — WhatsApp message aane par ek line bolegi (reply nahi)"
+                    } else {
+                        "Off — sirf alert, kabhi auto-reply nahi"
+                    },
+                    icon = Icons.Default.Message,
+                    switch = whatsappAlertsOn,
+                    onCheckedChange = { checked ->
+                        WhatsAppArrivalAlerts.setEnabled(context, checked)
+                        whatsappAlertsOn = checked
+                    }
+                )
+                Text(
+                    text = "Alerts ke liye notification access chahiye — Settings > " +
+                        "Permissions mein 'Notifications' on karo. Alerts sirf tab " +
+                        "bolti hain jab Lia idle ho — conversation ke beech mein kabhi nahi.",
+                    fontSize = 13.sp,
+                    color = colors.textSecondary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+        }
+
+        // V16 (P0-2): Advanced — grouped rows, each with a one-line "why".
+        NovaSectionHeader(title = "Advanced")
+        NovaGlassCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            elevation = 4.dp
+        ) {
+            Column {
+                NovaSettingsRow(
+                    title = "Voice pipeline debugger",
+                    subtitle = "Live voice session ki details — latency, reconnects",
+                    icon = Icons.Default.Speed,
+                    onClick = { navController.navigate("debug") }
+                )
+                NovaSettingsRow(
+                    title = "Privacy",
+                    subtitle = "Kya data kahan jata hai — aur kya kabhi nahi jata",
+                    icon = Icons.Default.Security,
+                    onClick = { navController.navigate("privacy") }
+                )
+                NovaSettingsRow(
+                    title = "About",
+                    subtitle = "Version, credits aur app ke baare mein",
+                    icon = Icons.Default.Info,
+                    onClick = { navController.navigate("about") }
+                )
             }
         }
     }
