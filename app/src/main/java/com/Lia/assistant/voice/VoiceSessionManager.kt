@@ -18,6 +18,9 @@ import com.Lia.assistant.action.DeviceCommand
 import com.Lia.assistant.action.DeviceCommandParser
 import com.Lia.assistant.action.InstalledAppLabelCache
 import com.Lia.assistant.data.ApiKeyStore
+import com.Lia.assistant.data.ChatHistoryMessage
+import com.Lia.assistant.data.ChatHistoryStore
+import com.Lia.assistant.data.ChatSession
 import com.Lia.assistant.data.LanguagePreference
 import com.Lia.assistant.data.Personality
 import com.Lia.assistant.data.PersonalityRepository
@@ -763,6 +766,10 @@ object VoiceSessionManager {
         audioIO = null
         Log.d(TAG, "Voice stopped: mic released, audio focus abandoned")
 
+        // V13: save this voice conversation to History before the
+        // in-memory turns are cleared below, so it survives restarts.
+        saveVoiceSessionToHistory()
+
         EchoGuard.reset()
         ConversationMemory.clear()
 
@@ -773,5 +780,34 @@ object VoiceSessionManager {
         SpeechLevelTracker.reset()
         _vadActive.value = false
         _muted.value = false
+    }
+
+    /**
+     * V13: persist the voice conversation that just ended, so it shows
+     * up in History like a text chat. Only saves when the user actually
+     * said something — a session that never got a word saves nothing.
+     * SharedPreferences apply() is async, so this never delays the mic
+     * release above.
+     */
+    private fun saveVoiceSessionToHistory() {
+        val ctx = appContext ?: return
+        val turns = ConversationMemory.snapshot()
+        if (turns.none { it.role == MemoryRole.USER }) return
+        val firstUser = turns.firstOrNull { it.role == MemoryRole.USER }?.text ?: return
+        val lastText = turns.lastOrNull()?.text.orEmpty()
+        ChatHistoryStore.saveSession(
+            ctx,
+            ChatSession(
+                title = firstUser.take(40),
+                preview = lastText.take(80),
+                personality = _currentPersonality.value.displayName,
+                messages = turns.map {
+                    ChatHistoryMessage(
+                        role = if (it.role == MemoryRole.USER) "user" else "assistant",
+                        text = it.text
+                    )
+                }
+            )
+        )
     }
 }
