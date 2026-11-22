@@ -204,11 +204,16 @@ fun ChatScreen(
     // TTS lifecycle
     var tts: TextToSpeech? by remember { mutableStateOf(null) }
     DisposableEffect(Unit) {
-        val ttsInstance = TextToSpeech(context) { status ->
+        // NOTE: the instance must be declared BEFORE the constructor call —
+        // referencing the val inside its own init lambda is an "unresolved
+        // reference" compile error (run #91). onInit fires after construction,
+        // so ttsInstance is assigned by the time the lambda runs.
+        var ttsInstance: TextToSpeech? = null
+        ttsInstance = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 // V12: the cute voice — a female system voice, a little
                 // higher and slower. No key, no network, works offline.
-                CuteVoice.applyCuteVoice(ttsInstance)
+                ttsInstance?.let { CuteVoice.applyCuteVoice(it) }
             }
         }
         tts = ttsInstance
@@ -216,8 +221,8 @@ fun ChatScreen(
         onDispose {
             ElevenLabsAudioPlayer.onPlaybackFinished = null
             ElevenLabsAudioPlayer.stop()
-            ttsInstance.stop()
-            ttsInstance.shutdown()
+            ttsInstance?.stop()
+            ttsInstance?.shutdown()
         }
     }
 
