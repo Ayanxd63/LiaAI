@@ -6,6 +6,7 @@ import android.content.Context
 import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,11 +14,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -52,9 +53,13 @@ import com.Lia.assistant.action.AppContext
 import com.Lia.assistant.action.DeviceActions
 import com.Lia.assistant.action.DeviceCommandParser
 import com.Lia.assistant.data.ApiKeyStore
+import com.Lia.assistant.data.ChatHistoryMessage
+import com.Lia.assistant.data.ChatHistoryStore
+import com.Lia.assistant.data.ChatSession
 import com.Lia.assistant.data.ElevenLabsStore
 import com.Lia.assistant.data.EnginePreferences
 import com.Lia.assistant.data.NovaAppState
+import com.Lia.assistant.data.Personality
 import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.forge.ForgeIntent
 import com.Lia.assistant.ui.components.ChatMessage
@@ -83,10 +88,32 @@ import kotlinx.coroutines.withContext
 /** Cap on characters sent to ElevenLabs per reply (free-tier friendly). */
 private const val MAX_ELEVENLABS_TTS_CHARS = 1000
 
+/**
+ * V13 — show engine failures the way a girlfriend would: warm Roman
+ * Urdu, never a raw "Error: ..." line. Network problems (the common
+ * case on a slow connection) get the offline message; overload gets a
+ * "try again in a minute"; anything else is shown as-is, without the
+ * "Error: " prefix.
+ */
+private fun friendlyDisplayError(raw: String): String {
+    val lower = raw.lowercase()
+    return when {
+        lower.contains("couldn't reach") || lower.contains("internet") ||
+            lower.contains("network") || lower.contains("connection") ->
+            "Net nahi lag raha — WiFi ya mobile data check kar ke dobara try karo. Main yahin hun 💖"
+        lower.contains("busy") || lower.contains("overload") ||
+            lower.contains("high demand") || lower.contains("rate limit") ->
+            "Free AI abhi thoda busy hai — ek minute ruk ke dobara try karo."
+        else -> raw.removePrefix("Error: ").trim().ifEmpty { "Kuch garbar ho gayi — dobara try karo." }
+    }
+}
+
 @Composable
 fun ChatScreen(
     navController: NavController,
     appState: NovaAppState,
+    // V13: when opened from History, the saved chat to continue.
+    sessionId: String? = null,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalNovaColors.current
@@ -94,11 +121,71 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
+    // V13: warm first-run welcome from the Girlfriend — only when the
+    // user has never chatted before. A fresh chat later gets the short
+    // greeting; other personalities keep the classic hello.
+    val isGirlfriend = appState.personality == Personality.GF_MODE
+    val welcomeText = when {
+        isGirlfriend && appState.conversations.isEmpty() ->
+            "Hey jan! 💖 Main tumhari Lia hun — tumhari apni girlfriend. " +
+                "Aaj kaisa feel kar rahe ho? Batao na, main sun rahi hun."
+        isGirlfriend -> "Hey jan! 💖 Batao, kya baat hai?"
+        else -> "Hello! I am ${appState.assistantName}. How can I assist you today?"
+    }
+
     val messages = remember {
         mutableStateListOf(
             ChatMessage(
-                text = "Hello! I am ${appState.assistantName}. How can I assist you today?",
+                text = welcomeText,
                 isUser = false
+            )
+        )
+    }
+
+    // V13: the session this chat is being saved under. Created on the
+    // first user message of a fresh chat; taken from History otherwise.
+    var currentSessionId by remember { mutableStateOf(sessionId) }
+
+    // V13: reopening a saved chat replaces the welcome message with the
+    // real turns, so the conversation continues where it stopped.
+    LaunchedEffect(sessionId) {
+        if (sessionId == null) return@LaunchedEffect
+        val saved = ChatHistoryStore.loadSessions(context)
+            .firstOrNull { it.id == sessionId }
+        if (saved != null && saved.messages.isNotEmpty()) {
+            currentSessionId = saved.id
+            messages.clear()
+            messages.addAll(
+                saved.messages.map {
+                    ChatMessage(text = it.text, isUser = it.role == "user")
+                }
+            )
+        }
+    }
+
+    /**
+     * V13: persist this chat (title = first thing the user said,
+     * preview = latest message) so it survives app restarts and shows
+     * up in History. Skipped until the user has said something.
+     */
+    fun persistSession() {
+        val id = currentSessionId
+            ?: java.util.UUID.randomUUID().toString().also { currentSessionId = it }
+        val turns = messages.filter { !it.isStreaming && it.text.isNotBlank() }
+        val firstUser = turns.firstOrNull { it.isUser }?.text ?: return
+        appState.saveChatSession(
+            context,
+            ChatSession(
+                id = id,
+                title = firstUser.take(40),
+                preview = turns.last().text.take(80),
+                personality = appState.personality.displayName,
+                messages = turns.map {
+                    ChatHistoryMessage(
+                        role = if (it.isUser) "user" else "assistant",
+                        text = it.text
+                    )
+                }
             )
         )
     }
@@ -205,6 +292,8 @@ fun ChatScreen(
 
         messages.add(ChatMessage(text = trimmed, isUser = true))
         inputText = ""
+        // V13: the user said something — this chat now has a session.
+        persistSession()
 
         // Check Website Forge intent
         val forgePrompt = ForgeIntent.extract(trimmed)
@@ -215,6 +304,7 @@ fun ChatScreen(
                     isUser = false
                 )
             )
+            persistSession()
             ForgeController.start(context, forgePrompt)
             navController.navigate("forge")
             return
@@ -236,6 +326,7 @@ fun ChatScreen(
                 withContext(Dispatchers.Main) {
                     isTyping = false
                     messages.add(ChatMessage(text = reply, isUser = false))
+                    persistSession()
                 }
             }
             return
@@ -304,6 +395,8 @@ fun ChatScreen(
                             val finalIdx = messages.indexOfFirst { it.id == placeholderId }
                             if (finalIdx != -1) {
                                 messages[finalIdx] = messages[finalIdx].copy(isStreaming = false)
+                                // V13: the reply is complete — save the chat.
+                                persistSession()
                                 // ElevenLabs text-chat TTS (v10): when an
                                 // ElevenLabs voice is selected, speak Lia's
                                 // reply aloud with that voice. No voice
@@ -318,11 +411,13 @@ fun ChatScreen(
                     is ChatReplyResult.Error -> {
                         messages.add(
                             ChatMessage(
-                                text = "Error: ${result.message}",
+                                // V13: warm Roman Urdu, never "Error: ...".
+                                text = friendlyDisplayError(result.message),
                                 isUser = false,
                                 isError = true
                             )
                         )
+                        persistSession()
                     }
                 }
             }
@@ -446,6 +541,40 @@ fun ChatScreen(
             if (isTyping) {
                 item {
                     NovaTypingDots(modifier = Modifier.padding(start = 20.dp, bottom = 8.dp))
+                }
+            }
+        }
+
+        // V13: quick-reply chips on a fresh chat — one tap to start
+        // talking, no typing needed. Girlfriend-flavoured by default.
+        if (messages.size <= 1 && !isTyping) {
+            val quickReplies = if (isGirlfriend) {
+                listOf("Kaisi ho? 💖", "Mujhe miss kiya?", "Ek joke sunao", "Aaj kya karein?")
+            } else {
+                listOf("Hello!", "Ek joke sunao", "Mujhe ek kahani sunao", "Tum kya kar sakti ho?")
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                quickReplies.forEach { label ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(colors.surfaceGlass)
+                            .clickable { sendMessage(label) }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            fontSize = 13.sp,
+                            color = colors.textPrimary
+                        )
+                    }
                 }
             }
         }
