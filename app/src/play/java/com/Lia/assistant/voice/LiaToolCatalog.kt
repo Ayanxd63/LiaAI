@@ -46,6 +46,44 @@ object LiaToolCatalog {
             )
         )
 
+        // V14 — device control tools (SAFE + permission-based only).
+        array.put(
+            GeminiToolUtils.functionDecl(
+                name = "set_brightness",
+                description = "Sets the screen brightness to a percentage (0-100). Needs the WRITE_SETTINGS permission; if it is not granted, tell the user to grant it in Settings.",
+                params = mapOf("level" to "Brightness percentage from 0 to 100"),
+                required = listOf("level")
+            )
+        )
+
+        array.put(
+            GeminiToolUtils.functionDecl(
+                name = "set_dnd",
+                description = "Turns Do Not Disturb on or off. Needs Notification Policy Access; if it is not granted, tell the user to grant it in Settings.",
+                params = mapOf("enabled" to "true to turn Do Not Disturb on, false to turn it off"),
+                required = listOf("enabled")
+            )
+        )
+
+        array.put(
+            GeminiToolUtils.functionDecl(
+                name = "read_notifications",
+                description = "Reads the user's recent notifications out loud (app, title, text). Needs notification access; if it is not granted, tell the user to grant it in Settings."
+            )
+        )
+
+        array.put(
+            GeminiToolUtils.functionDecl(
+                name = "reply_notification",
+                description = "Replies to the newest replyable notification, through the original app's own reply action. Never invent a recipient: reply only to a notification that actually arrived.",
+                params = mapOf(
+                    "app" to "Optional app name to reply to, e.g. WhatsApp (omit to reply to the newest notification)",
+                    "message" to "The reply text to send"
+                ),
+                required = listOf("message")
+            )
+        )
+
         return array
     }
 }
