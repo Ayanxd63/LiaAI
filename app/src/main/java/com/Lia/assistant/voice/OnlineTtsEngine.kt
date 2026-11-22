@@ -27,10 +27,9 @@ import java.util.concurrent.TimeUnit
 /**
  * V17 (online voice) — internet TTS: Kokoro-82M via mesmer.tools.
  * Free, no key, no signup. This is the human-like voice ayan asked
- * for: the on-device Pocket TTS model is small and can sound flat,
- * so the online voice speaks Lia's replies when internet is
- * available, and the on-device voice is the fallback — never the
- * other way round.
+ * for: the online voice speaks Lia's replies when internet is
+ * available, and the device voice (system TTS) is the fallback —
+ * never the other way round.
  *
  * Endpoint (verified live 2026-11-22, and re-verified before this
  * file was written):
@@ -52,7 +51,7 @@ import java.util.concurrent.TimeUnit
  *   high quality is offered as an option, never the default, and the
  *   response's fellBack flag is always honoured and shown.
  *
- * Honest limits (shown in Settings → On-device voice, not hidden):
+ * Honest limits (shown in Settings → Lia's voice, not hidden):
  * - 20 generations per hour per IP (server-enforced). A local
  *   counter fails fast at 20 so the app falls back instantly
  *   instead of waiting on a 429. Cached repeats (same text + voice)
@@ -63,7 +62,7 @@ import java.util.concurrent.TimeUnit
  *   generation when it is not cached).
  * - mesmer.tools is a small third-party service: it can be slow or
  *   down. It is NEVER the only voice — the chain is always
- *   online → Pocket (on-device) → system TTS, and a failure shows
+ *   online → system TTS, and a failure shows
  *   the reply as text rather than stalling (see
  *   VoiceSessionManager.speakVoiceChain).
  *
@@ -252,7 +251,7 @@ object OnlineTtsEngine {
             if (quotaUsed(context) >= HOURLY_LIMIT) {
                 throw OnlineTtsException(
                     OnlineTtsException.Kind.QUOTA,
-                    "Online voice ki limit khatam (20 ghantay mein) — offline voice bol rahi hai."
+                    "Online voice ki limit khatam (20 ghantay mein) — system voice bol rahi hai."
                 )
             }
             files += fetchChunk(context, dir, key, chunk, quality, voiceId)
@@ -281,7 +280,7 @@ object OnlineTtsEngine {
                     if (response.code == 429) {
                         throw OnlineTtsException(
                             OnlineTtsException.Kind.QUOTA,
-                            "Online voice ki limit khatam (20 ghantay mein) — offline voice bol rahi hai."
+                            "Online voice ki limit khatam (20 ghantay mein) — system voice bol rahi hai."
                         )
                     }
                     if (!response.isSuccessful) {
@@ -358,10 +357,10 @@ object OnlineTtsEngine {
     }
 
     /**
-     * Speak [text] with the online voice, then [onDone]. Mirrors
-     * PocketTtsEngine.speak's contract: [onDone] fires when playback
-     * ends, [onError] fires with the typed failure (the caller falls
-     * back to the next voice engine). Callbacks run on the main
+     * Speak [text] with the online voice, then [onDone]. Same contract
+     * as the system-TTS path: [onDone] fires when playback ends,
+     * [onError] fires with the typed failure (the caller falls back
+     * to the next voice engine). Callbacks run on the main
      * thread. [stop] cancels playback.
      */
     fun speak(
