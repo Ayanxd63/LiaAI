@@ -19,6 +19,11 @@ import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.data.NovaPreferences
 import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.ui.screens.about.AboutScreen
+import com.Lia.assistant.ui.screens.character.CHARACTER_SETTINGS_ROUTE
+import com.Lia.assistant.ui.screens.character.CharacterSettingsScreen
+import com.Lia.assistant.ui.screens.elevenlabs.ElevenLabsSettingsScreen
+import com.Lia.assistant.ui.screens.keyboard.VoiceKeyboardSettingsScreen
+import com.Lia.assistant.ui.screens.voice.VoiceSettingsScreen
 import com.Lia.assistant.ui.screens.chat.ChatScreen
 import com.Lia.assistant.ui.screens.create.CreateImageScreen
 import com.Lia.assistant.ui.screens.debug.DebugScreen
@@ -102,6 +107,11 @@ fun NovaApp(appState: NovaAppState) {
                     // v10: official LIA quick actions — Create Image + Write.
                     composable("create_image") { CreateImageScreen(navController) }
                     composable("write") { WriteScreen(navController) }
+                    // v10: settings screens for the new features.
+                    composable(CHARACTER_SETTINGS_ROUTE) { CharacterSettingsScreen(navController) }
+                    composable("elevenlabs_settings") { ElevenLabsSettingsScreen(navController) }
+                    composable("voice_settings") { VoiceSettingsScreen(navController) }
+                    composable("voice_keyboard") { VoiceKeyboardSettingsScreen(navController) }
 
                     // Flavor-specific routes (e.g. accessibility disclosure in direct)
                     registerAccessibilityDisclosureRoute(navController)

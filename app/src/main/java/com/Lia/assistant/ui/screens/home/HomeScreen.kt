@@ -235,6 +235,14 @@ fun HomeScreen(
 
         Spacer(modifier = Modifier.height(36.dp))
 
+        // v10: Create Image + Write quick actions (official LIA home actions)
+        CreateWriteQuickActions(
+            navController = navController,
+            modifier = Modifier.padding(horizontal = 20.dp)
+        )
+
+        Spacer(modifier = Modifier.height(36.dp))
+
         // "Try saying" 3D tilted cards row
         Column(modifier = Modifier.fillMaxWidth()) {
             Text(
