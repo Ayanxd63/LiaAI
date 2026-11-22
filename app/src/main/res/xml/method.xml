@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Lia Voice Keyboard — input-method declaration.
+
+  Referenced from AndroidManifest.xml via the service's meta-data
+  (android:name="android.view.im", android:resource="@xml/method").
+  See the v10-keyboard report for the exact manifest entries the parent
+  merges — this file alone does not register the keyboard.
+
+  Two subtypes: Hindi (hi-IN) first, English (en-IN) second, matching the
+  SpeechRecognizer language order in LiaKeyboardService. Subtypes only
+  advertise the languages; recognition itself is done by SpeechRecognizer.
+-->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:supportsSwitchingToNextInputMethod="true">
+
+    <subtype
+        android:imeSubtypeLocale="hi_IN"
+        android:imeSubtypeMode="keyboard"
+        android:imeSubtypeExtraValue="TryDisplayName=Lia Voice Keyboard (Hindi)" />
+
+    <subtype
+        android:imeSubtypeLocale="en_IN"
+        android:imeSubtypeMode="keyboard"
+        android:imeSubtypeExtraValue="TryDisplayName=Lia Voice Keyboard (English)" />
+
+</input-method>

@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Lia AI</string>
+    <string name="lia_voice_keyboard_label">Lia Voice Keyboard</string>
 </resources>
