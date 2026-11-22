@@ -38,7 +38,6 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Mood
-import androidx.compose.material.icons.filled.OfflineBolt
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Security
@@ -91,7 +90,9 @@ import com.Lia.assistant.ui.theme.LocalNovaColors
 import com.Lia.assistant.ui.theme.SerifFontFamily
 import com.Lia.assistant.ui.theme.nightSky
 import com.Lia.assistant.voice.AlwaysListeningWatchdogWorker
-import com.Lia.assistant.voice.OfflineModelManager
+import com.Lia.assistant.data.VoiceOutputEngine
+import com.Lia.assistant.data.VoiceOutputPreferences
+import com.Lia.assistant.voice.OnlineTtsEngine
 import com.Lia.assistant.voice.VoiceForegroundService
 import com.Lia.assistant.voice.WakeWordModelManager
 import kotlinx.coroutines.Dispatchers
@@ -114,20 +115,20 @@ fun SettingsScreen(
     // the row subtitle updates the moment the user taps it.
     var engine by remember { mutableStateOf(EnginePreferences.getEngine(context)) }
 
-    // V15: engine dialog + offline state. The model check (SHA-256 over
-    // ~0.5 GB) and the fact count are refreshed on IO every time this
-    // screen is entered, so returning from the download screen shows
+    // V15: engine dialog. The fact count is refreshed on IO every time
+    // this screen is entered, so returning from the memory screen shows
     // the new state.
     var showEngineDialog by remember { mutableStateOf(false) }
-    var offlineModelReady by remember { mutableStateOf(false) }
-    var offlineFallbackOn by remember {
-        mutableStateOf(EnginePreferences.isOfflineFallbackEnabled(context))
-    }
     var memoryFactCount by remember { mutableStateOf(0) }
+    // V18: Lia's voice choice (ONLINE / SYSTEM) + online quota used
+    // this hour, refreshed on entry.
+    var voiceEngine by remember { mutableStateOf(VoiceOutputPreferences.getEngine(context)) }
+    var showVoiceDialog by remember { mutableStateOf(false) }
+    var onlineQuotaUsed by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
-            offlineModelReady = OfflineModelManager.isModelReady(context)
             memoryFactCount = FactMemoryStore.loadFacts(context).size
+            onlineQuotaUsed = OnlineTtsEngine.quotaUsed(context)
         }
     }
 
@@ -294,18 +295,13 @@ fun SettingsScreen(
                     icon = Icons.Default.Key,
                     onClick = { showApiKeyDialog = true }
                 )
-                // V12/V15: AI engine — Pollinations is free with no key and
-                // is the default. Gemini needs the key above. OFFLINE is
-                // the on-device model (needs the download first). Tapping
-                // opens a 3-way picker instead of cycling, so the choice
+                // V12/V18: AI engine — Pollinations is free with no key and
+                // is the default. Gemini needs the key above. Tapping
+                // opens a 2-way picker instead of cycling, so the choice
                 // is always visible.
                 NovaSettingsRow(
                     title = "AI Engine",
                     subtitle = when {
-                        engine == ChatEngine.OFFLINE && offlineModelReady ->
-                            "Offline — on this phone, no internet"
-                        engine == ChatEngine.OFFLINE ->
-                            "Offline — model not downloaded yet"
                         engine == ChatEngine.GEMINI && ApiKeyStore.hasKey(context) ->
                             "Gemini (your key) — better quality"
                         else -> "Pollinations — free, no key"
@@ -330,44 +326,20 @@ fun SettingsScreen(
                         preset = next
                     }
                 )
-                // V15: offline AI — download / delete the on-device model
-                // (Wi-Fi only, ~0.5 GB, never inside the APK).
+                // V18: Lia's voice — ONLINE (Kokoro, human-like, ~20/hour)
+                // or SYSTEM (device TTS). The on-device Pocket TTS voice
+                // was removed in the V18 diet; ONLINE stays the default.
                 NovaSettingsRow(
-                    title = "Offline AI",
-                    subtitle = if (offlineModelReady) {
-                        "Model downloaded — works without internet"
-                    } else {
-                        "Not downloaded (~0.5 GB, Wi-Fi only)"
+                    title = "Lia's voice",
+                    subtitle = when (voiceEngine) {
+                        VoiceOutputEngine.ONLINE ->
+                            "Internet voice (Kokoro) — insano jaisi awaz · " +
+                                "$onlineQuotaUsed/20 is ghantay mein"
+                        VoiceOutputEngine.SYSTEM ->
+                            "Device voice — hamesha available, bina internet"
                     },
-                    icon = Icons.Default.OfflineBolt,
-                    onClick = { navController.navigate("offline_model") }
-                )
-                // V17: on-device voice — Lia's own voice (Pocket TTS),
-                // on-device speech recognition, VAD gate, voice-match,
-                // laugh detection, semantic memory. Each engine downloads
-                // its own model on Wi-Fi only, never inside the APK.
-                NovaSettingsRow(
-                    title = "On-device voice",
-                    subtitle = "Lia ki awaz, sunna, VAD — bina key, bina internet",
                     icon = Icons.Default.RecordVoiceOver,
-                    onClick = { navController.navigate("on_device_voice") }
-                )
-                // V15: when the online engine is rate-limited or offline,
-                // answer with the offline model at once (plain-language
-                // label in the chat) instead of a long silent wait.
-                NovaSettingsRow(
-                    title = "Offline fallback",
-                    subtitle = if (offlineFallbackOn) {
-                        "On — slow online replies answer offline instead"
-                    } else {
-                        "Off — online errors just show an error"
-                    },
-                    icon = Icons.Default.Speed,
-                    switch = offlineFallbackOn,
-                    onCheckedChange = { checked ->
-                        EnginePreferences.setOfflineFallbackEnabled(context, checked)
-                        offlineFallbackOn = checked
-                    }
+                    onClick = { showVoiceDialog = true }
                 )
                 // V16 (P1-12): human-paced typing — replies type out word
                 // by word at a human pace (90ms/word) instead of streaming
@@ -736,9 +708,9 @@ fun SettingsScreen(
         }
     }
 
-    // V15: AI engine picker — Pollinations / Gemini / Offline, with the
+    // V15: AI engine picker — Pollinations / Gemini, with the
     // state of each shown plainly. Gemini without a key opens the key
-    // dialog; Offline without a model opens the download screen.
+    // dialog.
     if (showEngineDialog) {
         AlertDialog(
             onDismissRequest = { showEngineDialog = false },
@@ -816,37 +788,83 @@ fun SettingsScreen(
                             )
                         }
                     }
-                    // Offline — needs the downloaded model.
+                }
+            },
+            confirmButton = {
+                NovaButton(
+                    text = "Close",
+                    onClick = { showEngineDialog = false },
+                    type = NovaButtonType.TEXT
+                )
+            },
+            containerColor = colors.surfaceRaised
+        )
+    }
+
+    // V18: Lia's voice picker — ONLINE (Kokoro) / SYSTEM (device TTS).
+    // ONLINE is the default; a quota-exhausted or offline ONLINE
+    // reply falls back to SYSTEM automatically.
+    if (showVoiceDialog) {
+        AlertDialog(
+            onDismissRequest = { showVoiceDialog = false },
+            title = { Text(text = "Lia's voice", color = colors.textPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val optionModifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                    // ONLINE — human-like internet voice, ~20/hour.
                     Row(
                         modifier = optionModifier.clickable {
-                            if (!offlineModelReady) {
-                                showEngineDialog = false
-                                navController.navigate("offline_model")
-                            } else {
-                                EnginePreferences.setEngine(context, ChatEngine.OFFLINE)
-                                engine = ChatEngine.OFFLINE
-                                showEngineDialog = false
-                            }
+                            VoiceOutputPreferences.setEngine(context, VoiceOutputEngine.ONLINE)
+                            voiceEngine = VoiceOutputEngine.ONLINE
+                            showVoiceDialog = false
                         },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Offline — on this phone",
+                                text = "Internet voice (Kokoro)",
                                 fontSize = 15.sp,
                                 color = colors.textPrimary
                             )
                             Text(
-                                text = if (offlineModelReady) {
-                                    "No internet needed, quick short replies"
-                                } else {
-                                    "Model not downloaded yet — tap to download"
-                                },
+                                text = "Insano jaisi awaz, bina key · ~20 ghantay mein, phir device voice",
                                 fontSize = 12.sp,
                                 color = colors.textSecondary
                             )
                         }
-                        if (engine == ChatEngine.OFFLINE) {
+                        if (voiceEngine == VoiceOutputEngine.ONLINE) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = colors.accent
+                            )
+                        }
+                    }
+                    // SYSTEM — device TTS, always available.
+                    Row(
+                        modifier = optionModifier.clickable {
+                            VoiceOutputPreferences.setEngine(context, VoiceOutputEngine.SYSTEM)
+                            voiceEngine = VoiceOutputEngine.SYSTEM
+                            showVoiceDialog = false
+                        },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Device voice",
+                                fontSize = 15.sp,
+                                color = colors.textPrimary
+                            )
+                            Text(
+                                text = "Hamesha available — bina internet, bina limit",
+                                fontSize = 12.sp,
+                                color = colors.textSecondary
+                            )
+                        }
+                        if (voiceEngine == VoiceOutputEngine.SYSTEM) {
                             Icon(
                                 imageVector = Icons.Default.Check,
                                 contentDescription = "Selected",
@@ -859,7 +877,7 @@ fun SettingsScreen(
             confirmButton = {
                 NovaButton(
                     text = "Close",
-                    onClick = { showEngineDialog = false },
+                    onClick = { showVoiceDialog = false },
                     type = NovaButtonType.TEXT
                 )
             },
