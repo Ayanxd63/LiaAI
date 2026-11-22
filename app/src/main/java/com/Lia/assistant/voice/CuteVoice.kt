@@ -34,8 +34,26 @@ object CuteVoice {
     /**
      * Apply the cute voice to [tts]. Call inside the TextToSpeech
      * onInit callback (voices are only listed once the engine is ready).
+     *
+     * V16 (P0-5): when the user picked a device voice in the voice
+     * picker, [preferredVoiceName] names it — that voice wins. Otherwise
+     * the best female system voice is used, as before.
      */
-    fun applyCuteVoice(tts: TextToSpeech) {
+    fun applyCuteVoice(tts: TextToSpeech, preferredVoiceName: String? = null) {
+        if (!preferredVoiceName.isNullOrBlank()) {
+            val wanted = try {
+                tts.voices?.firstOrNull { it.name == preferredVoiceName }
+            } catch (_: Exception) {
+                null
+            }
+            if (wanted != null) {
+                tts.voice = wanted
+                tts.setPitch(PITCH)
+                tts.setSpeechRate(RATE)
+                return
+            }
+            // Stored voice is gone (engine changed) — fall through to auto.
+        }
         val female = pickFemaleVoice(tts)
         if (female != null) {
             tts.voice = female

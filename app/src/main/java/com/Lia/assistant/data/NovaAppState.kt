@@ -37,6 +37,14 @@ class NovaAppState(context: Context) {
     )
         private set
 
+    // V16 (P1-11): accent colour — ROSE (default, preserves the V13
+    // warm rose theme), BLUE, or PURPLE. Drives Material3 primary via
+    // NovaTheme; the stored value wins when the user picked one.
+    var accent by mutableStateOf(
+        NovaPreferences.getString(context, NovaPreferences.Keys.ACCENT, "ROSE")
+    )
+        private set
+
     // V12: Girlfriend is the default personality (ayan's order). The
     // stored value wins when the user picked something else.
     var personality by mutableStateOf(
@@ -165,6 +173,15 @@ class NovaAppState(context: Context) {
     fun applyOrbStyle(context: Context, style: String) {
         orbStyle = style
         NovaPreferences.putString(context, NovaPreferences.Keys.ORB_STYLE, style)
+    }
+
+    fun applyAccent(context: Context, accentName: String) {
+        val normalized = accentName.uppercase()
+        accent = when (normalized) {
+            "BLUE", "PURPLE" -> normalized
+            else -> "ROSE"
+        }
+        NovaPreferences.putString(context, NovaPreferences.Keys.ACCENT, accent)
     }
 
     fun applyPersonality(context: Context, p: Personality) {

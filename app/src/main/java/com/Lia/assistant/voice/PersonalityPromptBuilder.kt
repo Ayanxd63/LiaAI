@@ -12,7 +12,10 @@ object PersonalityPromptBuilder {
         recap: String?,
         assistantName: String,
         // V15: long-term memory — same block as the text path.
-        memoryBlock: String? = null
+        memoryBlock: String? = null,
+        // V16 (P1-7): Lia's own voice beats (pet-name ladder, short
+        // replies, owning mistakes). Empty when the caller has none.
+        beats: String? = null
     ): String {
         val sections = mutableListOf<String>()
 
@@ -26,6 +29,11 @@ object PersonalityPromptBuilder {
 
         // (c) Personality instruction
         sections.add(personality.systemInstruction)
+
+        // V16 (c2): Lia's own voice beats — how she talks.
+        if (!beats.isNullOrBlank()) {
+            sections.add(beats)
+        }
 
         // V15 (c2): long-term memory — facts Lia remembers about the user.
         if (!memoryBlock.isNullOrBlank()) {

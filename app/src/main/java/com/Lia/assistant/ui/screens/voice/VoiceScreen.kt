@@ -2,6 +2,7 @@ package com.Lia.assistant.ui.screens.voice
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -45,6 +46,7 @@ import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.ui.components.NovaButton
+import com.Lia.assistant.ui.components.NovaChip
 import com.Lia.assistant.ui.components.NovaVoiceVisualizer
 import com.Lia.assistant.ui.fx.LiaOrb3D
 import com.Lia.assistant.ui.fx.ListeningEdgeGlow
@@ -70,6 +72,18 @@ fun VoiceScreen(
     val amplitude by VoiceSessionManager.amplitude.collectAsState()
     val muted by VoiceSessionManager.muted.collectAsState()
     val statusText by VoiceSessionManager.statusText.collectAsState()
+    // V16 (P0-4): the last error, so a timeout reads differently from
+    // an API failure or an offline-engine failure.
+    val lastError by VoiceSessionManager.lastError.collectAsState()
+
+    // V16 (P0-4): Back closes the OVERLAY (stops the session, back to
+    // Home) — it never exits the app any more. This was the V11
+    // Appetize finding: Back from the voice overlay used to drop the
+    // user on the Android home screen.
+    BackHandler {
+        VoiceForegroundService.stop(context)
+        navController.popBackStack()
+    }
 
     val screenWidth = LocalConfiguration.current.screenWidthDp.dp
     val orbSize = screenWidth * 0.70f
@@ -193,6 +207,60 @@ fun VoiceScreen(
                         fontSize = 20.sp,
                         color = colors.textPrimary
                     )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // V16 (P0-4): the 4-state orb — idle / listening /
+                    // thinking / speaking, each with its own colour. The
+                    // active state is filled; the rest are quiet pills.
+                    // CONNECTING counts as listening; ERROR shows the
+                    // distinct error line below instead of a state pill.
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val activeLabel = when (state) {
+                            NovaOrbState.IDLE -> "Idle"
+                            NovaOrbState.LISTENING, NovaOrbState.CONNECTING -> "Listening"
+                            NovaOrbState.THINKING -> "Thinking"
+                            NovaOrbState.SPEAKING -> "Speaking"
+                            NovaOrbState.ERROR -> null
+                        }
+                        for (label in listOf("Idle", "Listening", "Thinking", "Speaking")) {
+                            NovaChip(
+                                text = label,
+                                selected = activeLabel == label,
+                                onClick = {}
+                            )
+                        }
+                    }
+
+                    // V16 (P0-4): timeout errors surface distinctly —
+                    // a 20s timeout, an API/key failure and an offline
+                    // failure are three different problems with three
+                    // different fixes, so they must not all read as
+                    // "Soch rahi hun…".
+                    if (state == NovaOrbState.ERROR) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = when {
+                                statusText.contains("Zyada der", ignoreCase = true) ||
+                                    lastError?.contains("imeout", ignoreCase = true) == true ->
+                                    "Timeout: 20 second mein jawab nahi aaya — " +
+                                        "dobara bolo. (Net slow ho to Offline engine try karo.)"
+                                lastError?.contains("key", ignoreCase = true) == true ->
+                                    "API key ka masla hai — Settings > Gemini API Key " +
+                                        "check karo, ya Pollinations engine use karo."
+                                statusText.contains("Offline", ignoreCase = true) ||
+                                    lastError?.contains("ffline", ignoreCase = true) == true ->
+                                    "Offline engine ka masla — Settings > Offline AI " +
+                                        "se model download check karo."
+                                else -> lastError
+                                    ?: "Kuch ghalat ho gaya — dobara try karo."
+                            },
+                            fontSize = 14.sp,
+                            color = colors.error
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(16.dp))
 

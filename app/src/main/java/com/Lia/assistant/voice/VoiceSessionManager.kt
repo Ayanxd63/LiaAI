@@ -21,11 +21,15 @@ import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.ChatHistoryMessage
 import com.Lia.assistant.data.ChatHistoryStore
 import com.Lia.assistant.data.ChatSession
+import com.Lia.assistant.data.DeviceTtsVoicePreferences
 import com.Lia.assistant.data.EnginePreferences
+import com.Lia.assistant.data.EnginePreset
+import com.Lia.assistant.data.EnginePresetPreferences
 import com.Lia.assistant.data.FactMemoryStore
 import com.Lia.assistant.data.LanguagePreference
 import com.Lia.assistant.data.MemoryCapture
 import com.Lia.assistant.data.MemoryFact
+import com.Lia.assistant.data.NovaPreferences
 import com.Lia.assistant.data.Personality
 import com.Lia.assistant.data.PersonalityRepository
 import com.Lia.assistant.forge.ForgeController
@@ -288,10 +292,16 @@ object VoiceSessionManager {
 
         // System TTS, cute voice (female voice, pitch 1.2, rate 0.95).
         // No key, no network — works offline on every phone.
+        // V16 (P0-5): the user's picked device voice wins when set.
         noKeyTts = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 noKeyTtsReady = true
-                noKeyTts?.let { CuteVoice.applyCuteVoice(it) }
+                noKeyTts?.let {
+                    CuteVoice.applyCuteVoice(
+                        it,
+                        DeviceTtsVoicePreferences.getVoiceName(context)
+                    )
+                }
             }
         }
 
@@ -525,14 +535,28 @@ object VoiceSessionManager {
                     detectedLanguage = _detectedLanguage.value,
                     recap = ConversationMemory.recap(),
                     assistantName = assistantName,
-                    memoryBlock = FactMemoryStore.memoryBlock(ctx)
+                    memoryBlock = FactMemoryStore.memoryBlock(ctx),
+                    // V16 (P1-7): Lia's own voice beats.
+                    beats = LiaVoiceBeats.section(
+                        personality,
+                        NovaPreferences.getString(
+                            ctx,
+                            NovaPreferences.Keys.USER_NAME,
+                            "Friend"
+                        )
+                    )
                 )
                 val history = ConversationMemory.snapshot().map { turn ->
                     ChatTurn(isUser = turn.role == MemoryRole.USER, text = turn.text)
                 }
-                val useOffline = EnginePreferences.useOffline(ctx)
-                val fallbackEnabled = EnginePreferences.isOfflineFallbackEnabled(ctx)
+                // V16 (P0-6): the Fast preset answers offline first when a
+                // model is on the phone (no network wait); other presets
+                // keep the chosen engine, with the usual offline fallback.
                 val offlineReady = OfflineModelManager.isModelReady(ctx)
+                val useOffline = EnginePreferences.useOffline(ctx) ||
+                    (EnginePresetPreferences.getPreset(ctx) == EnginePreset.FAST &&
+                        offlineReady)
+                val fallbackEnabled = EnginePreferences.isOfflineFallbackEnabled(ctx)
 
                 // 20s deadline for the whole round-trip: a hung request
                 // must never wedge the overlay (V14 bug #2).
@@ -689,7 +713,16 @@ object VoiceSessionManager {
             recap = recap,
             assistantName = assistantName,
             // V15: long-term memory, same block as the no-key path.
-            memoryBlock = FactMemoryStore.memoryBlock(currentContext)
+            memoryBlock = FactMemoryStore.memoryBlock(currentContext),
+            // V16 (P1-7): Lia's own voice beats.
+            beats = LiaVoiceBeats.section(
+                personality,
+                NovaPreferences.getString(
+                    currentContext,
+                    NovaPreferences.Keys.USER_NAME,
+                    "Friend"
+                )
+            )
         )
 
         val liveListener = object : GeminiLiveClient.Listener {

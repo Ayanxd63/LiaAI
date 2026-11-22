@@ -73,7 +73,9 @@ class MainActivity : ComponentActivity() {
                 // V13: warm rose theme while the Girlfriend is active.
                 // appState.personality is Compose state, so switching
                 // personality re-themes the app live, no restart needed.
-                romantic = appState.personality == Personality.GF_MODE
+                romantic = appState.personality == Personality.GF_MODE,
+                // V16 (P1-11): accent picker — rose default.
+                accent = appState.accent
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     NovaApp(appState = appState)

@@ -103,6 +103,17 @@ fun MemoryScreen(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
         )
 
+        // V16 (P1-4): secrets are never saved — the deny-list runs
+        // before any capture, and short throwaway lines are ignored.
+        Text(
+            text = "Secrets kabhi save nahi hote: password, PIN, OTP, card, " +
+                "bank, salary ya health wali baatein Lia kabhi yaad nahi " +
+                "rakhti — na khud se, na tumhare kehne par.",
+            fontSize = 13.sp,
+            color = colors.textSecondary,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+        )
+
         NovaGlassCard(
             modifier = Modifier
                 .fillMaxWidth()

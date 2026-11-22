@@ -20,6 +20,10 @@ fun NovaTheme(
     // uses the warm rose variant (see DarkRoseNovaColors). Light theme
     // is untouched — romance stays on the night background.
     romantic: Boolean = false,
+    // V16 (P1-11): accent colour — ROSE is the default (preserves the
+    // V13 theme exactly: rose when romantic, amber otherwise). BLUE /
+    // PURPLE override the accent, secondary and glow in any theme.
+    accent: String = "ROSE",
     content: @Composable () -> Unit
 ) {
     val isDark = when (mode.uppercase()) {
@@ -28,10 +32,24 @@ fun NovaTheme(
         else -> isSystemInDarkTheme()
     }
 
-    val novaColors = if (isDark) {
+    val baseColors = if (isDark) {
         if (romantic) DarkRoseNovaColors else DarkNovaColors
     } else {
         LightNovaColors
+    }
+
+    val novaColors = when (accent.uppercase()) {
+        "BLUE" -> baseColors.copy(
+            accent = Color(0xFF5B8DEF),
+            accentSecondary = Color(0xFF7FB3FF),
+            accentGlow = Color(0x4D5B8DEF)
+        )
+        "PURPLE" -> baseColors.copy(
+            accent = Color(0xFFB388FF),
+            accentSecondary = Color(0xFFCE93D8),
+            accentGlow = Color(0x4DB388FF)
+        )
+        else -> baseColors
     }
 
     val materialColors = if (isDark) {

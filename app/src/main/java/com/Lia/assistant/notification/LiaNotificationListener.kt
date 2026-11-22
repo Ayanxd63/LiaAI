@@ -43,20 +43,24 @@ class LiaNotificationListener : NotificationListenerService() {
         } catch (_: Exception) {
             posted.packageName
         }
-        NotificationStore.add(
-            LiaNotification(
-                key = posted.key,
-                packageName = posted.packageName,
-                appLabel = label,
-                title = title,
-                text = text,
-                postedAtMs = posted.postTime,
-                hasReplyAction = notification.actions?.any {
-                    it.remoteInputs?.isNotEmpty() == true
-                } == true,
-                sbn = posted
-            )
+        val liaNotification = LiaNotification(
+            key = posted.key,
+            packageName = posted.packageName,
+            appLabel = label,
+            title = title,
+            text = text,
+            postedAtMs = posted.postTime,
+            hasReplyAction = notification.actions?.any {
+                it.remoteInputs?.isNotEmpty() == true
+            } == true,
+            sbn = posted
         )
+        NotificationStore.add(liaNotification)
+        // V16 (P1-8): WhatsApp arrival alerts only — one spoken line
+        // when a WhatsApp message arrives and Lia is idle. Never
+        // mid-conversation, never the message text itself. Auto-reply
+        // is deliberately NOT built (see WhatsAppArrivalAlerts).
+        WhatsAppArrivalAlerts.maybeAlert(this, liaNotification)
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {

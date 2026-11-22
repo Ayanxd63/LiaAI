@@ -21,6 +21,23 @@ object NovaPreferences {
         const val SPEECH_SPEED = "speech_speed"
         const val VOICE_VOLUME = "voice_volume"
         const val ASSISTANT_NAME = "assistant_name"
+        // V16: accent picker (rose/blue/purple), engine preset
+        // (Fast/Warm/Smart), human-paced typing, chosen device TTS
+        // voice, first-run setup wizard, WhatsApp arrival alerts,
+        // voice enrolment, skills, weather cache, crash reports.
+        const val ACCENT = "accent"
+        const val ENGINE_PRESET = "engine_preset"
+        const val HUMAN_PACED_TYPING = "human_paced_typing"
+        const val DEVICE_TTS_VOICE = "device_tts_voice"
+        const val SETUP_WIZARD_DONE = "setup_wizard_done"
+        const val WHATSAPP_ALERTS_ENABLED = "whatsapp_alerts_enabled"
+        const val VOICE_ENROLLED = "voice_enrolled"
+        const val VOICE_ENROL_ROLE = "voice_enrol_role"
+        const val VOICE_ENROL_COUNT = "voice_enrol_count"
+        const val SKILLS_INSTALLED = "skills_installed"
+        const val WEATHER_CACHE_JSON = "weather_cache_json"
+        const val WEATHER_CACHE_TIME = "weather_cache_time"
+        const val LAST_SEEN_CRASH = "last_seen_crash"
     }
 
     private fun getPrefs(context: Context): SharedPreferences {

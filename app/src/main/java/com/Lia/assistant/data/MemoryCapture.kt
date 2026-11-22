@@ -74,19 +74,46 @@ object MemoryCapture {
         return NO_WORDS.any { lower == it || lower.startsWith("$it ") || lower.startsWith("$it,") }
     }
 
+    /** V16 (P1-4) — worthiness hints, Roman Urdu + English. A fact is
+     * worth remembering only when it says something about who he is,
+     * what he likes, who matters to him, or how he lives. */
+    private val WORTHINESS_HINTS = listOf(
+        "naam", "pasand", "favourite", "favorite", "dost", "ammi", "abu",
+        "bhai", "behen", "behan", "biwi", "shohar", "ustad", "teacher",
+        "college", "university", "parhta", "parhti", "padhta", "padhti",
+        "semester", "roz", "daily", "subah", "shaam", "kaam", "job",
+        "sheher", "city", "ghar", "birthday", "saal", "umar",
+        "name", "like", "love", "work", "study", "live", "lives",
+        "birthday", "age", "school", "friend", "mother", "father",
+        "brother", "sister", "girlfriend", "boyfriend"
+    )
+
+    /** V16 (P1-4) — stage 2 of the gate: a fact must be at least 12
+     * characters AND contain a worthiness hint word. Short throwaway
+     * lines ("ok", "theek hai") are never worth remembering. */
+    fun isWorthy(factText: String): Boolean {
+        val trimmed = factText.trim()
+        if (trimmed.length < 12) return false
+        val lower = trimmed.lowercase()
+        return WORTHINESS_HINTS.any { lower.contains(it) }
+    }
+
     /** Analyse one user turn. Never throws. */
     fun analyze(text: String): Capture {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || trimmed.length > 400) return Capture.None
+        // V16 (P1-4) — stage 1, deny-list FIRST: sensitive facts are
+        // never captured, never even proposed.
         if (isSensitive(trimmed)) return Capture.None
         val lower = trimmed.lowercase()
 
-        // 1. Explicit command — store immediately.
+        // 1. Explicit command — store immediately, but only when the
+        // fact passes the stage-2 worthiness gate.
         for (prefix in EXPLICIT_PREFIXES) {
             if (lower.startsWith(prefix)) {
                 val factText = trimmed.substring(prefix.length).trim()
                     .trimEnd('.', '!', ' ')
-                if (factText.length < 3) return Capture.None
+                if (!isWorthy(factText)) return Capture.None
                 return Capture.Save(
                     MemoryFact(
                         category = guessCategory(factText),
@@ -97,8 +124,10 @@ object MemoryCapture {
             }
         }
 
-        // 2. Light auto-rules — propose, never store silently.
+        // 2. Light auto-rules — propose, never store silently. The
+        // proposal must pass the same worthiness gate.
         val proposed = matchAutoRule(trimmed) ?: return Capture.None
+        if (!isWorthy(proposed.text)) return Capture.None
         return Capture.Confirm(proposed)
     }
 
