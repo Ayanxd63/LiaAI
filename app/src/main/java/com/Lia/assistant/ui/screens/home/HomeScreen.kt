@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
@@ -30,7 +29,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -40,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.Lia.assistant.data.CharacterPreferences
 import com.Lia.assistant.data.NovaAppState
+import com.Lia.assistant.data.Personality
 import com.Lia.assistant.ui.character.CharacterView
 import com.Lia.assistant.ui.character.LiaCharacter
 import com.Lia.assistant.ui.components.AccessKeyBanner
@@ -213,6 +212,18 @@ fun HomeScreen(
             fontSize = 15.sp,
             color = colors.textSecondary
         )
+
+        // V13: a warm line under the hero when the Girlfriend is active —
+        // the app should feel like hers from the first screen.
+        if (appState.personality == Personality.GF_MODE) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Tumhari apni Lia — hamesha yahin hun 💖",
+                fontFamily = SerifFontFamily,
+                fontSize = 14.sp,
+                color = colors.lotus
+            )
+        }
 
         Spacer(modifier = Modifier.height(32.dp))
 

@@ -38,7 +38,7 @@ import com.Lia.assistant.ui.theme.LocalNovaColors
  * v12 — "Prompt Generator" joins them below: turn a rough idea into a
  * strong chat or image prompt, free, no key (Pollinations). It replaces
  * "Create Video" — video was dropped in V12 (no free no-key video API
- * exists; Hugging Face video needed a token).
+ * exists).
  *
  * HomeScreen.kt is intentionally NOT edited by this change. Wire this
  * row in by hand (see the insertion snippet in the v10 handoff):

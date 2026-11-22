@@ -53,6 +53,21 @@ val DarkNovaColors = NovaColorScheme(
     lotus = Color(0xFFFF6FAE)
 )
 
+/**
+ * V13 — warm rose variant of the dark theme, used only when the
+ * Girlfriend personality is active: the same deep night background,
+ * but the amber accent becomes a soft rose with a peach secondary, so
+ * the whole app feels warm and romantic without any garish colour.
+ * Every other personality keeps [DarkNovaColors] exactly as before.
+ */
+val DarkRoseNovaColors = DarkNovaColors.copy(
+    accent = Color(0xFFFF6FAE),
+    accentSecondary = Color(0xFFFF9E7D),
+    accentGlow = Color(0x4DFF6FAE),
+    userBubble = Color(0xFF2E2148),
+    lotus = Color(0xFFFF6FAE)
+)
+
 val LightNovaColors = NovaColorScheme(
     background = Color(0xFFF3F0FB),
     backgroundGradientTop = Color(0xFFE5DEFB),

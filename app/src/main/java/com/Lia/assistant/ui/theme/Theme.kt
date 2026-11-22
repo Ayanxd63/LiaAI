@@ -16,6 +16,10 @@ import androidx.core.view.WindowCompat
 fun NovaTheme(
     mode: String = "DARK",
     reducedMotion: Boolean = false,
+    // V13: when the Girlfriend personality is active, the dark theme
+    // uses the warm rose variant (see DarkRoseNovaColors). Light theme
+    // is untouched — romance stays on the night background.
+    romantic: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val isDark = when (mode.uppercase()) {
@@ -24,7 +28,11 @@ fun NovaTheme(
         else -> isSystemInDarkTheme()
     }
 
-    val novaColors = if (isDark) DarkNovaColors else LightNovaColors
+    val novaColors = if (isDark) {
+        if (romantic) DarkRoseNovaColors else DarkNovaColors
+    } else {
+        LightNovaColors
+    }
 
     val materialColors = if (isDark) {
         darkColorScheme(

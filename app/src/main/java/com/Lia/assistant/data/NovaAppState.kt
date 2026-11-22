@@ -14,7 +14,9 @@ data class ConversationItem(
     val id: String = java.util.UUID.randomUUID().toString(),
     val title: String,
     val preview: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    // V13: which personality this chat was with (shown in History).
+    val personality: String = "Girlfriend"
 )
 
 class NovaAppState(context: Context) {
@@ -104,7 +106,35 @@ class NovaAppState(context: Context) {
     )
         private set
 
-    val conversations = mutableStateListOf<ConversationItem>()
+    // V13: persisted chat history. Loaded once from ChatHistoryStore
+    // (SharedPreferences JSON) so past chats survive app restarts. The
+    // list is newest first; the store caps at 30 chats.
+    val conversations = mutableStateListOf<ConversationItem>().apply {
+        addAll(ChatHistoryStore.loadSessions(context).map { it.toItem() })
+    }
+
+    /** Save (insert or replace) one chat session, newest first. */
+    fun saveChatSession(context: Context, session: ChatSession) {
+        ChatHistoryStore.saveSession(context, session)
+        val item = session.toItem()
+        conversations.removeAll { it.id == item.id }
+        conversations.add(0, item)
+        while (conversations.size > ChatHistoryStore.MAX_SESSIONS) {
+            conversations.removeAt(conversations.lastIndex)
+        }
+    }
+
+    /** Delete one saved chat, from the store and the list. */
+    fun deleteConversation(context: Context, id: String) {
+        ChatHistoryStore.deleteSession(context, id)
+        conversations.removeAll { it.id == id }
+    }
+
+    /** Delete every saved chat, from the store and the list. */
+    fun clearConversations(context: Context) {
+        ChatHistoryStore.clearAll(context)
+        conversations.clear()
+    }
 
     fun applyThemeMode(context: Context, mode: String) {
         themeMode = mode
@@ -173,11 +203,4 @@ class NovaAppState(context: Context) {
         NovaPreferences.putFloat(context, NovaPreferences.Keys.VOICE_VOLUME, clamped)
     }
 
-    fun addConversation(item: ConversationItem) {
-        conversations.add(0, item)
-    }
-
-    fun clearConversations() {
-        conversations.clear()
-    }
 }
