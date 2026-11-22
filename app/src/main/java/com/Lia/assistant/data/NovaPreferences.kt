@@ -49,6 +49,17 @@ object NovaPreferences {
         const val LAUGH_DETECTION_ENABLED = "v17_laugh_detection_enabled"
         const val SPEAKER_VERIFY_ENABLED = "v17_speaker_verify_enabled"
         const val MEMORY_EMBEDDINGS_ENABLED = "v17_memory_embeddings_enabled"
+        // V17 (online voice) — internet TTS via mesmer.tools (Kokoro,
+        // free, no key): voice choice + quality, the one-time
+        // migration to the online default, and the local 20/hour
+        // quota counter (the server enforces the real limit; the
+        // local counter just fails fast). Stored as strings —
+        // NovaPreferences has no Long/Int accessors.
+        const val ONLINE_TTS_QUALITY = "v17_online_tts_quality"
+        const val ONLINE_TTS_VOICE = "v17_online_tts_voice"
+        const val ONLINE_VOICE_MIGRATED = "v17_online_voice_migrated"
+        const val ONLINE_TTS_QUOTA_WINDOW_START = "v17_online_tts_quota_window_start"
+        const val ONLINE_TTS_QUOTA_COUNT = "v17_online_tts_quota_count"
     }
 
     private fun getPrefs(context: Context): SharedPreferences {

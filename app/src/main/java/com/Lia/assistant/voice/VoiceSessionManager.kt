@@ -775,6 +775,106 @@ object VoiceSessionManager {
     }
 
     /**
+     * Speak [text] with Lia's voice, then run [onDone]. The voice
+     * chain (see [speakVoiceChain]) tries the user's chosen voice
+     * first and falls back through the other engines, so one dead
+     * engine can never wedge the turn on "speaking" or swallow the
+     * reply. The recognizer stays off while speaking so Lia never
+     * hears herself.
+     */
+    private fun speakNoKey(text: String, onDone: (() -> Unit)? = null) {
+        // A reply arrived — the turn is over, watchdog off.
+        disarmThinkingWatchdog()
+        val ctx = appContext
+        if (ctx == null) {
+            // No app context (should not happen mid-session): show the
+            // reply as text so it is never lost, then continue.
+            _statusText.value = text.take(200)
+            _state.value = NovaOrbState.LISTENING
+            setTurnState(VoiceTurnState.LISTENING)
+            onDone?.invoke()
+            return
+        }
+        speakVoiceChain(ctx, VoiceOutputPreferences.resolveOrder(ctx), 0, text, onDone)
+    }
+
+    /**
+     * Walk the voice chain for one reply. [index] is the engine to
+     * try now; on failure the next engine is tried, and when the
+     * chain is exhausted the reply shows as text. [onDone] fires
+     * exactly once, at the end of whichever path speaks (or shows).
+     */
+    private fun speakVoiceChain(
+        ctx: Context,
+        order: List<VoiceOutputEngine>,
+        index: Int,
+        text: String,
+        onDone: (() -> Unit)?
+    ) {
+        if (index >= order.size) {
+            _statusText.value = text.take(200)
+            _state.value = NovaOrbState.LISTENING
+            setTurnState(VoiceTurnState.LISTENING)
+            onDone?.invoke()
+            return
+        }
+        when (order[index]) {
+            VoiceOutputEngine.ONLINE -> speakOnlineNoKey(ctx, text, onDone) {
+                speakVoiceChain(ctx, order, index + 1, text, onDone)
+            }
+            VoiceOutputEngine.POCKET -> {
+                val engine = pocketTts
+                if (engine != null && !engine.isSpeaking()) {
+                    speakPocketNoKey(engine, text, onDone) {
+                        speakVoiceChain(ctx, order, index + 1, text, onDone)
+                    }
+                } else {
+                    // On-device voice not loaded yet — next engine.
+                    speakVoiceChain(ctx, order, index + 1, text, onDone)
+                }
+            }
+            VoiceOutputEngine.SYSTEM -> speakSystemNoKey(text, onDone)
+        }
+    }
+
+    /**
+     * V17 (online voice) — speak one reply with the internet voice
+     * (Kokoro via mesmer.tools, no key). On any failure (no
+     * internet, 20/hour quota, service down) [onFallback] runs so
+     * the next engine in the chain speaks instead.
+     */
+    private fun speakOnlineNoKey(
+        ctx: Context,
+        text: String,
+        onDone: (() -> Unit)? = null,
+        onFallback: () -> Unit
+    ) {
+        noKeySpeaking = true
+        _state.value = NovaOrbState.SPEAKING
+        setTurnState(VoiceTurnState.SPEAKING)
+        _statusText.value = "Lia bol rahi hai…"
+        _amplitude.value = 0.4f
+        OnlineTtsEngine.speak(
+            ctx,
+            scope,
+            text,
+            onDone = {
+                noKeySpeaking = false
+                _amplitude.value = 0f
+                _state.value = NovaOrbState.LISTENING
+                setTurnState(VoiceTurnState.LISTENING)
+                onDone?.invoke()
+            },
+            onError = { error ->
+                Log.w(TAG, "Online voice failed (${error.kind}) — falling back: ${error.message}")
+                noKeySpeaking = false
+                _amplitude.value = 0f
+                onFallback()
+            }
+        )
+    }
+
+    /**
      * Speak [text] with the cute system TTS voice, then run [onDone].
      * The recognizer stays off while speaking so Lia never hears herself.
      *
@@ -786,23 +886,7 @@ object VoiceSessionManager {
      * straight to [onDone]. A reply is never silently swallowed again —
      * including one that arrives before TTS init finishes.
      */
-    private fun speakNoKey(text: String, onDone: (() -> Unit)? = null) {
-        // A reply arrived — the turn is over, watchdog off.
-        disarmThinkingWatchdog()
-        // V17: the on-device voice speaks when the user picked it and
-        // the engine is ready; when it is still loading, the reply
-        // falls through to system TTS for this turn instead of
-        // stalling or being dropped.
-        val ctx = appContext
-        if (ctx != null &&
-            VoiceOutputPreferences.getEngine(ctx) == VoiceOutputEngine.POCKET
-        ) {
-            val engine = pocketTts
-            if (engine != null && !engine.isSpeaking()) {
-                speakPocketNoKey(engine, text, onDone)
-                return
-            }
-        }
+    private fun speakSystemNoKey(text: String, onDone: (() -> Unit)? = null) {
         val tts = noKeyTts
         if (tts == null || !noKeyTtsReady) {
             // TTS cannot speak: show the reply so it is not lost.
@@ -863,7 +947,8 @@ object VoiceSessionManager {
     private fun speakPocketNoKey(
         engine: PocketTtsEngine,
         text: String,
-        onDone: (() -> Unit)? = null
+        onDone: (() -> Unit)? = null,
+        onFallback: (() -> Unit)? = null
     ) {
         noKeySpeaking = true
         _state.value = NovaOrbState.SPEAKING
@@ -883,10 +968,15 @@ object VoiceSessionManager {
                 Log.w(TAG, "Pocket TTS failed: $message")
                 noKeySpeaking = false
                 _amplitude.value = 0f
-                _statusText.value = text.take(200)
-                _state.value = NovaOrbState.LISTENING
-                setTurnState(VoiceTurnState.LISTENING)
-                onDone?.invoke()
+                if (onFallback != null) {
+                    // Next engine in the chain speaks instead.
+                    onFallback()
+                } else {
+                    _statusText.value = text.take(200)
+                    _state.value = NovaOrbState.LISTENING
+                    setTurnState(VoiceTurnState.LISTENING)
+                    onDone?.invoke()
+                }
             }
         )
     }
