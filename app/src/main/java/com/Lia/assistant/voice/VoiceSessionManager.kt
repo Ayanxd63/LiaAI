@@ -107,7 +107,16 @@ object VoiceSessionManager {
     private fun localActionSignature(command: DeviceCommand): String? = when (command) {
         is DeviceCommand.OpenApp -> "open_app:${command.appName.lowercase()}"
         is DeviceCommand.Dial -> "call_contact:${command.target.lowercase()}"
+        // V14: a local direct call is the same call Gemini's call_contact
+        // would make — same namespace, so Gemini never dials twice.
+        is DeviceCommand.DirectCall -> "call_contact:${command.target.lowercase()}"
         is DeviceCommand.WhatsAppMessage -> "message_contact:${command.target.lowercase()}"
+        // V14: toggles must never run twice — DND twice undoes itself.
+        is DeviceCommand.Brightness -> "brightness"
+        is DeviceCommand.DoNotDisturb -> "dnd"
+        // V14: a notification reply sent twice is two messages.
+        is DeviceCommand.ReplyNotification ->
+            "reply_notification:${command.appHint?.lowercase() ?: "latest"}"
         else -> null
     }
 
@@ -116,8 +125,14 @@ object VoiceSessionManager {
         if (System.currentTimeMillis() - lastLocalActionAtMs > 20_000L) return false
         return when (toolName) {
             "open_app" -> signature == "open_app:${args.optString("app_name", "").lowercase()}"
-            "call_contact" -> signature == "call_contact:${args.optString("contact_name", "").lowercase()}"
+            "call_contact", "direct_call" ->
+                signature == "call_contact:${args.optString("contact_name", "").lowercase()}"
             "message_contact" -> signature == "message_contact:${args.optString("contact_name", "").lowercase()}"
+            // V14: Gemini's set_brightness / set_dnd / reply_notification
+            // must not re-run a command the local parser already did.
+            "set_brightness" -> signature == "brightness"
+            "set_dnd" -> signature == "dnd"
+            "reply_notification" -> signature.startsWith("reply_notification:")
             else -> false
         }
     }
