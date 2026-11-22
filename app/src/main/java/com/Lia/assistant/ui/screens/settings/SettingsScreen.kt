@@ -28,12 +28,11 @@ import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Mood
-import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,8 +51,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.Lia.assistant.data.ApiKeyStore
+import com.Lia.assistant.data.ChatEngine
 import com.Lia.assistant.data.ElevenLabsStore
-import com.Lia.assistant.data.HuggingFaceStore
+import com.Lia.assistant.data.EnginePreferences
 import com.Lia.assistant.data.LanguagePreference
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.ui.components.AccessibilitySettingsRow
@@ -78,6 +78,10 @@ fun SettingsScreen(
 
     var showApiKeyDialog by remember { mutableStateOf(false) }
     var apiKeyInput by remember { mutableStateOf(ApiKeyStore.getKey(context)) }
+
+    // V12: which engine answers. Local state mirrors the stored value so
+    // the row subtitle updates the moment the user taps it.
+    var engine by remember { mutableStateOf(EnginePreferences.getEngine(context)) }
 
     var showNameDialog by remember { mutableStateOf(false) }
     var nameInput by remember { mutableStateOf(appState.assistantName) }
@@ -159,11 +163,39 @@ fun SettingsScreen(
             elevation = 4.dp
         ) {
             Column {
+                // V12: the Gemini key is OPTIONAL now. Lia works free with
+                // no key at all (Pollinations). The key only matters when
+                // the user picks the Gemini engine below.
                 NovaSettingsRow(
-                    title = "Gemini API Key",
-                    subtitle = if (ApiKeyStore.hasKey(context)) "Configured locally" else "Tap to configure",
+                    title = "Gemini API Key (optional)",
+                    subtitle = if (ApiKeyStore.hasKey(context)) "Configured locally" else "Not needed — Lia works free without it",
                     icon = Icons.Default.Key,
                     onClick = { showApiKeyDialog = true }
+                )
+                // V12: AI engine — Pollinations is free with no key and is
+                // the default. Gemini needs the key above; tapping without
+                // a key opens the key dialog instead of switching.
+                NovaSettingsRow(
+                    title = "AI Engine",
+                    subtitle = if (engine == ChatEngine.GEMINI && ApiKeyStore.hasKey(context)) {
+                        "Gemini (your key) — better quality"
+                    } else {
+                        "Pollinations — free, no key"
+                    },
+                    icon = Icons.Default.Star,
+                    onClick = {
+                        if (!ApiKeyStore.hasKey(context)) {
+                            showApiKeyDialog = true
+                        } else {
+                            val next = if (engine == ChatEngine.GEMINI) {
+                                ChatEngine.POLLINATIONS
+                            } else {
+                                ChatEngine.GEMINI
+                            }
+                            EnginePreferences.setEngine(context, next)
+                            engine = next
+                        }
+                    }
                 )
                 NovaSettingsRow(
                     title = "Assistant Name",
@@ -230,17 +262,6 @@ fun SettingsScreen(
                     },
                     icon = Icons.Default.RecordVoiceOver,
                     onClick = { navController.navigate("elevenlabs_settings") }
-                )
-                // v11: Hugging Face — free video needs your own free token.
-                NovaSettingsRow(
-                    title = "Hugging Face",
-                    subtitle = if (HuggingFaceStore.hasToken(context)) {
-                        "Connected — free video ready"
-                    } else {
-                        "Free video — token needed"
-                    },
-                    icon = Icons.Default.Movie,
-                    onClick = { navController.navigate("huggingface_settings") }
                 )
             }
         }
@@ -326,7 +347,10 @@ fun SettingsScreen(
             text = {
                 Column {
                     Text(
-                        text = "Enter your Google Gemini API key. It is stored securely on your device only.",
+                        text = "Optional. Lia works free without any key (Pollinations). " +
+                            "Add your own free Gemini key only if you want Gemini's better " +
+                            "quality — then pick the Gemini engine in Settings. The key is " +
+                            "stored only on this phone.",
                         fontSize = 13.sp,
                         color = colors.textSecondary
                     )

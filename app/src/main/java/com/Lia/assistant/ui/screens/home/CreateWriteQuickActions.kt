@@ -16,7 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,16 +35,17 @@ import com.Lia.assistant.ui.theme.LocalNovaColors
  * missing: "Create Image" ("Photos into sketches") and "Write"
  * ("Notes, code, content").
  *
- * v11 — "Create Video" joins them below: free AI video from public
- * Hugging Face Spaces (needs the user's own free HF token, added in
- * Settings — Hugging Face).
+ * v12 — "Prompt Generator" joins them below: turn a rough idea into a
+ * strong chat or image prompt, free, no key (Pollinations). It replaces
+ * "Create Video" — video was dropped in V12 (no free no-key video API
+ * exists; Hugging Face video needed a token).
  *
  * HomeScreen.kt is intentionally NOT edited by this change. Wire this
  * row in by hand (see the insertion snippet in the v10 handoff):
  * place [CreateWriteQuickActions] on HomeScreen between the Talk/Type
  * pills and the "TRY SAYING" section. It lives in the same package as
  * HomeScreen, so no import is needed there. The "create_image", "write"
- * and "create_video" routes are registered in NovaApp.
+ * and "prompt_generator" routes are registered in NovaApp.
  */
 @Composable
 fun CreateWriteQuickActions(
@@ -75,10 +76,10 @@ fun CreateWriteQuickActions(
             )
         }
         CreateWriteActionCard(
-            title = "Create Video",
-            subtitle = "Free AI video — 6 second clips",
-            icon = Icons.Default.Movie,
-            onClick = { navController.navigate("create_video") },
+            title = "Prompt Generator",
+            subtitle = "Better prompts for chat & images — free",
+            icon = Icons.Default.Lightbulb,
+            onClick = { navController.navigate("prompt_generator") },
             modifier = Modifier.fillMaxWidth()
         )
     }

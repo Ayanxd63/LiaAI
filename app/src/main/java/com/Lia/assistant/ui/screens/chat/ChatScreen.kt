@@ -53,6 +53,7 @@ import com.Lia.assistant.action.DeviceActions
 import com.Lia.assistant.action.DeviceCommandParser
 import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.ElevenLabsStore
+import com.Lia.assistant.data.EnginePreferences
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.forge.ForgeIntent
@@ -67,16 +68,17 @@ import com.Lia.assistant.ui.theme.nightSky
 import com.Lia.assistant.voice.ChatPromptBuilder
 import com.Lia.assistant.voice.ChatReplyResult
 import com.Lia.assistant.voice.ChatTurn
+import com.Lia.assistant.voice.CuteVoice
 import com.Lia.assistant.voice.ElevenLabsAudioPlayer
 import com.Lia.assistant.voice.ElevenLabsClient
 import com.Lia.assistant.voice.ElevenLabsResult
 import com.Lia.assistant.voice.GeminiTextClient
 import com.Lia.assistant.voice.NovaOrbState
+import com.Lia.assistant.voice.PollinationsClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Locale
 
 /** Cap on characters sent to ElevenLabs per reply (free-tier friendly). */
 private const val MAX_ELEVENLABS_TTS_CHARS = 1000
@@ -117,7 +119,9 @@ fun ChatScreen(
     DisposableEffect(Unit) {
         val ttsInstance = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.ENGLISH
+                // V12: the cute voice — a female system voice, a little
+                // higher and slower. No key, no network, works offline.
+                CuteVoice.applyCuteVoice(ttsInstance)
             }
         }
         tts = ttsInstance
@@ -152,6 +156,10 @@ fun ChatScreen(
         }
         val elevenVoiceId = ElevenLabsStore.selectedVoiceId(context)
         if (elevenVoiceId.isEmpty()) {
+            // V12 cute voice (system TTS, no key): re-apply pitch/rate in
+            // case the engine reset them.
+            tts?.setPitch(CuteVoice.PITCH)
+            tts?.setSpeechRate(CuteVoice.RATE)
             tts?.speak(msg.text, TextToSpeech.QUEUE_FLUSH, null, null)
             return
         }
@@ -233,7 +241,9 @@ fun ChatScreen(
             return
         }
 
-        // Call Gemini
+        // V12: call the selected engine. Pollinations is the default —
+        // free, no key, works the moment the app opens. Gemini is used
+        // only when the user added a key AND picked Gemini in Settings.
         isTyping = true
         retryNote = null
         elevenNote = null
@@ -246,17 +256,27 @@ fun ChatScreen(
             )
 
             val history = messages.map { ChatTurn(isUser = it.isUser, text = it.text) }
-            val result = GeminiTextClient.reply(
-                apiKey,
-                systemInstruction,
-                history,
-                onRetrying = { attempt ->
-                    // reply() runs on IO; hop to Main to update Compose state.
-                    scope.launch {
-                        retryNote = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
-                    }
+            val useGemini = EnginePreferences.useGemini(context)
+            val onRetrying: (Int) -> Unit = { attempt ->
+                // reply() runs on IO; hop to Main to update Compose state.
+                scope.launch {
+                    retryNote = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
                 }
-            )
+            }
+            val result = if (useGemini) {
+                GeminiTextClient.reply(
+                    apiKey,
+                    systemInstruction,
+                    history,
+                    onRetrying = onRetrying
+                )
+            } else {
+                PollinationsClient.chat(
+                    systemInstruction,
+                    history,
+                    onRetrying = onRetrying
+                )
+            }
 
             withContext(Dispatchers.Main) {
                 isTyping = false

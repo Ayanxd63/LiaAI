@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.navigation.NavController
 import com.Lia.assistant.data.ApiKeyStore
+import com.Lia.assistant.data.EnginePreferences
 import com.Lia.assistant.ui.components.NovaButton
 import com.Lia.assistant.ui.components.NovaButtonType
 import com.Lia.assistant.ui.components.NovaTextField
@@ -64,6 +65,7 @@ import com.Lia.assistant.ui.theme.LocalNovaColors
 import com.Lia.assistant.ui.theme.nightSky
 import com.Lia.assistant.voice.GeminiImageClient
 import com.Lia.assistant.voice.ImageGenResult
+import com.Lia.assistant.voice.PollinationsClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -126,7 +128,10 @@ fun CreateImageScreen(
         }
     }
 
-    val hasKey = ApiKeyStore.hasKey(context)
+    // V12: Pollinations Flux is the default — free, no key. Gemini is
+    // used only when the user added a key AND picked Gemini in Settings
+    // (it is the only engine that can restyle a picked photo).
+    val useGemini = EnginePreferences.useGemini(context)
     val pickedBitmap = remember(pickedBytes) {
         pickedBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
     }
@@ -140,15 +145,17 @@ fun CreateImageScreen(
             errorMessage = "Please describe the image, or pick a photo to restyle."
             return
         }
-        if (!hasKey) {
-            errorMessage = "Gemini API key is missing. Please add it in Settings."
+        // Pollinations is text-to-image only: restyling a picked photo
+        // needs Gemini. Say so plainly instead of failing silently.
+        if (pickedBytes != null && !useGemini) {
+            errorMessage = "Photo restyle needs Gemini — add a key in Settings and pick the " +
+                "Gemini engine, or describe an image from text (free, no key)."
             return
         }
         isGenerating = true
         errorMessage = null
         statusMessage = null
         scope.launch(Dispatchers.IO) {
-            val apiKey = ApiKeyStore.getKey(context)
             val fullPrompt = if (pickedBytes != null) {
                 "Turn this photo into a ${style.instruction}. " +
                     if (trimmed.isNotEmpty()) "Keep the subject and composition, but follow this: $trimmed"
@@ -156,12 +163,16 @@ fun CreateImageScreen(
             } else {
                 "Create a ${style.instruction} of: $trimmed"
             }
-            val result = GeminiImageClient.generate(
-                apiKey = apiKey,
-                prompt = fullPrompt,
-                inputImageBytes = pickedBytes,
-                inputMimeType = pickedMimeType
-            )
+            val result = if (useGemini) {
+                GeminiImageClient.generate(
+                    apiKey = ApiKeyStore.getKey(context),
+                    prompt = fullPrompt,
+                    inputImageBytes = pickedBytes,
+                    inputMimeType = pickedMimeType
+                )
+            } else {
+                PollinationsClient.generateImage(prompt = fullPrompt)
+            }
             withContext(Dispatchers.Main) {
                 isGenerating = false
                 when (result) {
@@ -210,8 +221,8 @@ fun CreateImageScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Missing-key card — honest, with a button to Settings.
-        if (!hasKey) {
+        // V12: free engine note — no key is needed for text-to-image.
+        if (!useGemini) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -220,21 +231,16 @@ fun CreateImageScreen(
                     .padding(16.dp)
             ) {
                 Text(
-                    text = "A Gemini API key is needed to create images.",
+                    text = "Free image — no key needed.",
                     fontSize = 15.sp,
                     color = colors.textPrimary
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Add your own free Gemini key in Settings — it is stored only on this phone.",
+                    text = "Powered by Pollinations Flux. For sharper results or photo restyle, " +
+                        "add a Gemini key in Settings and pick the Gemini engine.",
                     fontSize = 13.sp,
                     color = colors.textSecondary
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                NovaButton(
-                    text = "Open Settings",
-                    onClick = { navController.navigate("settings") },
-                    type = NovaButtonType.PRIMARY
                 )
             }
             Spacer(modifier = Modifier.height(16.dp))
@@ -318,7 +324,7 @@ fun CreateImageScreen(
             onClick = { generate() },
             type = NovaButtonType.PRIMARY,
             icon = Icons.Default.Image,
-            enabled = !isGenerating && hasKey,
+            enabled = !isGenerating,
             modifier = Modifier.fillMaxWidth()
         )
 

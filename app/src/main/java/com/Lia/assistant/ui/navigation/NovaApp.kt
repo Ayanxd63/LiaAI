@@ -22,12 +22,11 @@ import com.Lia.assistant.ui.screens.about.AboutScreen
 import com.Lia.assistant.ui.screens.character.CHARACTER_SETTINGS_ROUTE
 import com.Lia.assistant.ui.screens.character.CharacterSettingsScreen
 import com.Lia.assistant.ui.screens.elevenlabs.ElevenLabsSettingsScreen
-import com.Lia.assistant.ui.screens.huggingface.HuggingFaceSettingsScreen
 import com.Lia.assistant.ui.screens.keyboard.VoiceKeyboardSettingsScreen
+import com.Lia.assistant.ui.screens.prompt.PromptGeneratorScreen
 import com.Lia.assistant.ui.screens.voice.VoiceSettingsScreen
 import com.Lia.assistant.ui.screens.chat.ChatScreen
 import com.Lia.assistant.ui.screens.create.CreateImageScreen
-import com.Lia.assistant.ui.screens.create.CreateVideoScreen
 import com.Lia.assistant.ui.screens.debug.DebugScreen
 import com.Lia.assistant.ui.screens.forge.ForgeScreen
 import com.Lia.assistant.ui.screens.history.HistoryScreen
@@ -109,12 +108,11 @@ fun NovaApp(appState: NovaAppState) {
                     // v10: official LIA quick actions — Create Image + Write.
                     composable("create_image") { CreateImageScreen(navController) }
                     composable("write") { WriteScreen(navController) }
-                    // v11: free video from public Hugging Face Spaces.
-                    composable("create_video") { CreateVideoScreen(navController) }
+                    // v12: Prompt Generator replaces Create Video (video dropped).
+                    composable("prompt_generator") { PromptGeneratorScreen(navController) }
                     // v10: settings screens for the new features.
                     composable(CHARACTER_SETTINGS_ROUTE) { CharacterSettingsScreen(navController) }
                     composable("elevenlabs_settings") { ElevenLabsSettingsScreen(navController) }
-                    composable("huggingface_settings") { HuggingFaceSettingsScreen(navController) }
                     composable("voice_settings") { VoiceSettingsScreen(navController) }
                     composable("voice_keyboard") { VoiceKeyboardSettingsScreen(navController) }
 

@@ -20,10 +20,13 @@ object PersonalityRepository {
     private val KEY_VOICE = stringPreferencesKey("assistant_voice")
 
     fun getPersonalityFlow(context: Context): Flow<Personality> {
+        // V12: Girlfriend is the default personality — ayan ordered it ON
+        // by default. A user who picked another personality keeps theirs
+        // (the stored value wins over this fallback).
         val fallback = NovaPreferences.getString(
             context,
             NovaPreferences.Keys.PERSONALITY,
-            Personality.NORMAL.name
+            Personality.GF_MODE.name
         )
         return context.assistantDataStore.data.map { prefs ->
             val stored = prefs[KEY_PERSONALITY] ?: fallback

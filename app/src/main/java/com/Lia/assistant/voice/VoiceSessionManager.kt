@@ -1,6 +1,15 @@
 package com.Lia.assistant.voice
 
 import android.content.Context
+import android.content.Intent
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import com.Lia.assistant.action.ActionExecutor
 import com.Lia.assistant.action.AppContext
@@ -67,6 +76,18 @@ object VoiceSessionManager {
     private var audioIO: LiveAudioIO? = null
     private var appContext: Context? = null
 
+    // V12 no-key voice mode: Android SpeechRecognizer for input,
+    // Pollinations chat for the brain, system TextToSpeech (cute voice)
+    // for output. No key, no network service for the voice itself.
+    private var noKeyMode = false
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var noKeyTts: TextToSpeech? = null
+    private var noKeyTtsReady = false
+    private var noKeyListening = false
+    private var noKeySpeaking = false
+    private var noKeyRestartJob: Job? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private var reconnectJob: Job? = null
     private var silenceWatchdogJob: Job? = null
     private var isTurnActive = false
@@ -129,6 +150,14 @@ object VoiceSessionManager {
         VoiceLatencyTracker.reset()
         InstalledAppLabelCache.prewarm(context)
 
+        // V12: no Gemini key? Free no-key voice — on-device speech
+        // recognition + Pollinations chat + system TTS. The user is never
+        // asked for a key; the app just works when opened.
+        if (ApiKeyStore.getKey(context).isEmpty()) {
+            startNoKeyMode(context.applicationContext)
+            return
+        }
+
         audioIO = LiveAudioIO(
             onMicChunk = { bytes ->
                 if (_isActive.value && !_muted.value && !EchoGuard.isMicMuted()) {
@@ -149,6 +178,285 @@ object VoiceSessionManager {
                 connectSession(isResuming = false)
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // V12 no-key voice mode.
+    //
+    // How it works: the recognizer listens for one utterance, the
+    // transcript goes to Pollinations chat (same GF instruction as text
+    // chat), and the reply is spoken with the system TTS cute voice.
+    // Then listening restarts automatically — tap-to-talk, no wake word.
+    // Device commands from the transcript still run locally, exactly
+    // like the Live path (same parser, same 20s double-run guard).
+    //
+    // Mic guarantee (same as the Live path): stop() cancels + destroys
+    // the recognizer and stops + shuts down TTS, so nothing keeps the
+    // mic after the session ends and WhatsApp voice notes work again.
+    // While TTS is speaking, the recognizer is NOT listening, so Lia
+    // never hears her own voice as input.
+    // ------------------------------------------------------------------
+
+    private fun startNoKeyMode(context: Context) {
+        noKeyMode = true
+        _state.value = NovaOrbState.LISTENING
+        _statusText.value = "Boliye, main sun rahi hun…"
+
+        scope.launch {
+            _currentPersonality.value = runCatching {
+                PersonalityRepository.getPersonality(context)
+            }.getOrDefault(Personality.GF_MODE)
+            _currentLanguage.value = runCatching {
+                PersonalityRepository.getLanguage(context)
+            }.getOrDefault(LanguagePreference.AUTO)
+        }
+
+        // System TTS, cute voice (female voice, pitch 1.2, rate 0.95).
+        // No key, no network — works offline on every phone.
+        noKeyTts = TextToSpeech(context) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                noKeyTtsReady = true
+                noKeyTts?.let { CuteVoice.applyCuteVoice(it) }
+            }
+        }
+
+        startNoKeyListening()
+    }
+
+    /** Speech language for the recognizer: Urdu for Roman Urdu speech. */
+    private fun noKeyRecognitionLanguage(): String {
+        return if (_currentLanguage.value == LanguagePreference.ENGLISH) "en-US" else "ur-PK"
+    }
+
+    /** Start one listening round on the main thread (recognizer rule). */
+    private fun startNoKeyListening() {
+        if (!_isActive.value || !noKeyMode || _muted.value || noKeySpeaking) return
+        mainHandler.post {
+            if (!_isActive.value || !noKeyMode || _muted.value || noKeySpeaking) return@post
+            val ctx = appContext ?: return@post
+            try {
+                if (!SpeechRecognizer.isRecognitionAvailable(ctx)) {
+                    _state.value = NovaOrbState.ERROR
+                    _statusText.value = "Voice recognition is not available on this phone. " +
+                        "Text chat se baat kar lo."
+                    _lastError.value = "SpeechRecognizer unavailable"
+                    return@post
+                }
+                val recognizer = speechRecognizer
+                    ?: SpeechRecognizer.createSpeechRecognizer(ctx).also {
+                        it.setRecognitionListener(noKeyRecognitionListener)
+                        speechRecognizer = it
+                    }
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                    )
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, noKeyRecognitionLanguage())
+                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                }
+                noKeyListening = true
+                _state.value = NovaOrbState.LISTENING
+                _statusText.value = "Boliye, main sun rahi hun…"
+                recognizer.startListening(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "No-key listening failed", e)
+                noKeyListening = false
+            }
+        }
+    }
+
+    private fun stopNoKeyListening() {
+        noKeyRestartJob?.cancel()
+        noKeyRestartJob = null
+        if (!noKeyListening) return
+        noKeyListening = false
+        try {
+            speechRecognizer?.cancel()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun scheduleNoKeyRestart(delayMs: Long) {
+        if (!_isActive.value || !noKeyMode || _muted.value) return
+        noKeyRestartJob?.cancel()
+        noKeyRestartJob = scope.launch {
+            delay(delayMs)
+            if (_isActive.value && noKeyMode && !_muted.value && !noKeySpeaking) {
+                startNoKeyListening()
+            }
+        }
+    }
+
+    private val noKeyRecognitionListener = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) {
+            _state.value = NovaOrbState.LISTENING
+        }
+
+        override fun onBeginningOfSpeech() {
+            _state.value = NovaOrbState.LISTENING
+            _statusText.value = "Sun rahi hun…"
+        }
+
+        override fun onRmsChanged(rmsdB: Float) {
+            _amplitude.value = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
+        }
+
+        override fun onBufferReceived(buffer: ByteArray?) {}
+
+        override fun onEndOfSpeech() {
+            noKeyListening = false
+            _state.value = NovaOrbState.THINKING
+            _statusText.value = "Soch rahi hun…"
+        }
+
+        override fun onError(error: Int) {
+            noKeyListening = false
+            _amplitude.value = 0f
+            if (!_isActive.value || !noKeyMode || _muted.value) return
+            when (error) {
+                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
+                    _state.value = NovaOrbState.ERROR
+                    _statusText.value = "Microphone permission chahiye — Settings se allow karo."
+                    _lastError.value = "Microphone permission missing"
+                }
+                SpeechRecognizer.ERROR_NO_MATCH,
+                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+                    // Quiet room — listen again after a short pause.
+                    scheduleNoKeyRestart(1_500L)
+                }
+                else -> scheduleNoKeyRestart(800L)
+            }
+        }
+
+        override fun onResults(results: Bundle?) {
+            noKeyListening = false
+            _amplitude.value = 0f
+            val text = results
+                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                ?.firstOrNull()
+                .orEmpty()
+            if (text.isBlank()) {
+                scheduleNoKeyRestart(500L)
+                return
+            }
+            handleNoKeyTranscript(text)
+        }
+
+        override fun onPartialResults(partialResults: Bundle?) {}
+
+        override fun onEvent(eventType: Int, params: Bundle?) {}
+    }
+
+    /** One recognised utterance: device command or a Pollinations reply. */
+    private fun handleNoKeyTranscript(text: String) {
+        if (!_isActive.value || !noKeyMode) return
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) {
+            startNoKeyListening()
+            return
+        }
+        ConversationMemory.recordTurn(MemoryRole.USER, trimmed)
+        val detected = LanguageDetector.detect(trimmed)
+        if (detected != "UNKNOWN") {
+            _detectedLanguage.value = detected
+        }
+        _state.value = NovaOrbState.THINKING
+        _statusText.value = "Soch rahi hun…"
+
+        // Device command spoken in voice mode? Run it LOCALLY right away
+        // (same as the Live path), then SPEAK the confirmation.
+        val command = DeviceCommandParser.parse(trimmed, AppContext.current())
+        if (command != null) {
+            scope.launch {
+                val ctx = appContext ?: return@launch
+                val reply = try {
+                    DeviceActions.execute(ctx, command)
+                } catch (_: Exception) {
+                    "Ye kaam nahi ho saka — dobara try karo."
+                }
+                localActionSignature(command)?.let { signature ->
+                    lastLocalActionSignature = signature
+                    lastLocalActionAtMs = System.currentTimeMillis()
+                }
+                ConversationMemory.recordTurn(MemoryRole.ASSISTANT, reply)
+                speakNoKey(reply) { startNoKeyListening() }
+            }
+            return
+        }
+
+        scope.launch {
+            val ctx = appContext ?: return@launch
+            val personality = PersonalityRepository.getPersonality(ctx)
+            val language = PersonalityRepository.getLanguage(ctx)
+            val assistantName = PersonalityRepository.getAssistantName(ctx)
+            _currentPersonality.value = personality
+            _currentLanguage.value = language
+            val systemInstruction = PersonalityPromptBuilder.build(
+                personality = personality,
+                language = language,
+                detectedLanguage = _detectedLanguage.value,
+                recap = ConversationMemory.recap(),
+                assistantName = assistantName
+            )
+            val history = ConversationMemory.snapshot().map { turn ->
+                ChatTurn(isUser = turn.role == MemoryRole.USER, text = turn.text)
+            }
+            val result = PollinationsClient.chat(systemInstruction, history) { attempt ->
+                _statusText.value = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
+            }
+            when (result) {
+                is ChatReplyResult.Success -> {
+                    ConversationMemory.recordTurn(MemoryRole.ASSISTANT, result.text)
+                    speakNoKey(result.text) { startNoKeyListening() }
+                }
+                is ChatReplyResult.Error -> {
+                    ConversationMemory.recordTurn(MemoryRole.ASSISTANT, result.message)
+                    speakNoKey(result.message) { startNoKeyListening() }
+                }
+            }
+        }
+    }
+
+    /**
+     * Speak [text] with the cute system TTS voice, then run [onDone].
+     * The recognizer stays off while speaking so Lia never hears herself.
+     * If TTS is not ready yet, skip speaking and go straight to [onDone]
+     * — the reply is still in memory, and listening resumes.
+     */
+    private fun speakNoKey(text: String, onDone: (() -> Unit)? = null) {
+        val tts = noKeyTts
+        if (tts == null || !noKeyTtsReady) {
+            onDone?.invoke()
+            return
+        }
+        noKeySpeaking = true
+        _state.value = NovaOrbState.SPEAKING
+        _statusText.value = "Lia bol rahi hai…"
+        _amplitude.value = 0.4f
+        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {}
+
+            override fun onDone(utteranceId: String?) {
+                noKeySpeaking = false
+                _amplitude.value = 0f
+                _state.value = NovaOrbState.LISTENING
+                onDone?.invoke()
+            }
+
+            override fun onError(utteranceId: String?) {
+                noKeySpeaking = false
+                _amplitude.value = 0f
+                onDone?.invoke()
+            }
+        })
+        tts.speak(
+            text,
+            TextToSpeech.QUEUE_FLUSH,
+            null,
+            "lia-nokey-${System.currentTimeMillis()}"
+        )
     }
 
     private suspend fun connectSession(isResuming: Boolean) {
@@ -388,6 +696,9 @@ object VoiceSessionManager {
 
     fun refreshInstructions(context: Context) {
         if (!_isActive.value) return
+        // V12: no-key turns read the personality fresh every time, so
+        // there is nothing to reconnect — the next reply just uses it.
+        if (noKeyMode) return
         appContext = context.applicationContext
         scope.launch {
             sessionMutex.withLock {
@@ -402,6 +713,17 @@ object VoiceSessionManager {
         val next = !_muted.value
         _muted.value = next
         _statusText.value = if (next) "Microphone muted" else "Listening..."
+        if (noKeyMode) {
+            if (next) {
+                stopNoKeyListening()
+                try {
+                    noKeyTts?.stop()
+                } catch (_: Exception) {
+                }
+            } else if (_isActive.value) {
+                startNoKeyListening()
+            }
+        }
     }
 
     fun stop() {
@@ -411,6 +733,25 @@ object VoiceSessionManager {
         reconnectJob = null
         silenceWatchdogJob?.cancel()
         silenceWatchdogJob = null
+
+        // V12 no-key cleanup: cancel + destroy the recognizer and stop +
+        // shut down TTS, so nothing keeps the mic after the session ends
+        // — the same guarantee as the Live path below.
+        stopNoKeyListening()
+        try {
+            speechRecognizer?.destroy()
+        } catch (_: Exception) {
+        }
+        speechRecognizer = null
+        try {
+            noKeyTts?.stop()
+            noKeyTts?.shutdown()
+        } catch (_: Exception) {
+        }
+        noKeyTts = null
+        noKeyTtsReady = false
+        noKeyMode = false
+        noKeySpeaking = false
 
         client?.disconnect()
         client = null
