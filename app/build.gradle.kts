@@ -98,6 +98,14 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.webkit:webkit:1.12.1")
+    // V14: background watchdog (WorkManager) + on-device wake word (Vosk).
+    // Vosk is Apache-2.0, offline, free, no key. The voice model (~40 MB)
+    // is NOT bundled — it downloads on first enable (WakeWordModelManager).
+    // NOTE: the vosk-android version pin is verified by the first GitHub
+    // Actions build on this branch; if it fails to resolve, bump it to
+    // the current release on Maven Central.
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+    implementation("com.alphacephei:vosk-android:0.3.45")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
