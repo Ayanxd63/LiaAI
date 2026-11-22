@@ -57,8 +57,9 @@ enum class LiaCharacter(
     );
 
     companion object {
+        // V15: headphones is the default (ayan's order 2026-11-22).
         fun fromId(id: String?): LiaCharacter =
-            values().firstOrNull { it.id == id } ?: SAREE
+            values().firstOrNull { it.id == id } ?: HEADPHONES
     }
 }
 
