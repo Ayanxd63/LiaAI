@@ -237,12 +237,12 @@ object ElevenLabsAudioPlayer {
                 val mediaPlayer = MediaPlayer().apply {
                     setDataSource(file.absolutePath)
                     setOnCompletionListener {
-                        isPlaying = false
+                        this@ElevenLabsAudioPlayer.isPlaying = false
                         releasePlayer()
                         onPlaybackFinished?.invoke()
                     }
                     setOnErrorListener { _, _, _ ->
-                        isPlaying = false
+                        this@ElevenLabsAudioPlayer.isPlaying = false
                         releasePlayer()
                         onPlaybackFinished?.invoke()
                         true
