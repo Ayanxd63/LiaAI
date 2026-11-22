@@ -40,6 +40,12 @@ import com.Lia.assistant.ui.theme.LocalNovaColors
  * "Create Video" — video was dropped in V12 (no free no-key video API
  * exists).
  *
+ * V15: the Prompt Generator card moved to the TOP of this section. It
+ * used to sit below the Create Image/Write row — below the fold on a
+ * normal phone, with no scroll hint, so the Appetize tester never
+ * found it. Now it is the first thing under the Talk/Type pills. A
+ * second entry point also exists in Chat ("Prompt banao ✍️" chip).
+ *
  * HomeScreen.kt is intentionally NOT edited by this change. Wire this
  * row in by hand (see the insertion snippet in the v10 handoff):
  * place [CreateWriteQuickActions] on HomeScreen between the Talk/Type
@@ -56,6 +62,13 @@ fun CreateWriteQuickActions(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        CreateWriteActionCard(
+            title = "Prompt Generator",
+            subtitle = "Better prompts for chat & images — free",
+            icon = Icons.Default.Lightbulb,
+            onClick = { navController.navigate("prompt_generator") },
+            modifier = Modifier.fillMaxWidth()
+        )
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -75,13 +88,6 @@ fun CreateWriteQuickActions(
                 modifier = Modifier.weight(1f)
             )
         }
-        CreateWriteActionCard(
-            title = "Prompt Generator",
-            subtitle = "Better prompts for chat & images — free",
-            icon = Icons.Default.Lightbulb,
-            onClick = { navController.navigate("prompt_generator") },
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 

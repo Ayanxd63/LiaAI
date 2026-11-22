@@ -21,7 +21,9 @@ object ElevenLabsStore {
 
     private const val PREF_NAME = "elevenlabs_prefs"
 
-    private const val KEY_API_KEY = "elevenlabs_api_key"
+    // NOTE: the API key itself no longer lives here — V15 moved it to
+    // Keystore-backed encrypted storage (SecureCredentialStore). Only
+    // the voice/model/custom-voice prefs remain in this file.
     private const val KEY_VOICE_ID = "elevenlabs_voice_id"
     private const val KEY_VOICE_NAME = "elevenlabs_voice_name"
     private const val KEY_MODEL_ID = "elevenlabs_model_id"
@@ -38,19 +40,22 @@ object ElevenLabsStore {
     }
 
     // ---- API key -----------------------------------------------------------
+    // V15: the key lives in Keystore-backed encrypted storage
+    // (SecureCredentialStore) with a one-time migration from the old
+    // plain-text prefs. The API here is unchanged.
 
     fun saveKey(context: Context, key: String) {
-        getPrefs(context).edit().putString(KEY_API_KEY, key.trim()).apply()
+        SecureCredentialStore.saveElevenLabsKey(context, key)
     }
 
     fun getKey(context: Context): String {
-        return getPrefs(context).getString(KEY_API_KEY, "")?.trim() ?: ""
+        return SecureCredentialStore.getElevenLabsKey(context)
     }
 
-    fun hasKey(context: Context): Boolean = getKey(context).isNotEmpty()
+    fun hasKey(context: Context): Boolean = SecureCredentialStore.hasElevenLabsKey(context)
 
     fun clearKey(context: Context) {
-        getPrefs(context).edit().remove(KEY_API_KEY).apply()
+        SecureCredentialStore.clearElevenLabsKey(context)
     }
 
     // ---- Selected voice ----------------------------------------------------

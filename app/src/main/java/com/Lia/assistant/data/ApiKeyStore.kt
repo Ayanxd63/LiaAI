@@ -1,26 +1,26 @@
 package com.Lia.assistant.data
 
 import android.content.Context
-import android.content.SharedPreferences
 
+/**
+ * Gemini API key storage.
+ *
+ * V15: keys live in Keystore-backed encrypted storage
+ * ([SecureCredentialStore]) with a one-time migration from the old
+ * plain-text prefs. The API of this object is unchanged — every caller
+ * keeps working exactly as before.
+ */
 object ApiKeyStore {
-    private const val PREF_NAME = "nova_prefs"
-    private const val KEY_GEMINI_API_KEY = "gemini_api_key"
-
-    private fun getPrefs(context: Context): SharedPreferences {
-        return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-    }
 
     fun getKey(context: Context): String {
-        return getPrefs(context).getString(KEY_GEMINI_API_KEY, "")?.trim() ?: ""
+        return SecureCredentialStore.getGeminiKey(context)
     }
 
     fun saveKey(context: Context, key: String) {
-        val trimmed = key.trim()
-        getPrefs(context).edit().putString(KEY_GEMINI_API_KEY, trimmed).apply()
+        SecureCredentialStore.saveGeminiKey(context, key)
     }
 
     fun hasKey(context: Context): Boolean {
-        return getKey(context).isNotEmpty()
+        return SecureCredentialStore.hasGeminiKey(context)
     }
 }

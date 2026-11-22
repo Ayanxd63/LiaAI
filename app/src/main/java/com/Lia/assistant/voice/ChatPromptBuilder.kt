@@ -8,7 +8,11 @@ object ChatPromptBuilder {
     fun build(
         personality: Personality,
         language: LanguagePreference,
-        assistantName: String
+        assistantName: String,
+        // V15: long-term memory — the "Things I remember about you:"
+        // block (top 10 facts, <= 800 chars). Empty when memory is off
+        // or there are no facts; callers pass FactMemoryStore.memoryBlock.
+        memoryBlock: String? = null
     ): String {
         val sections = mutableListOf<String>()
 
@@ -17,6 +21,12 @@ object ChatPromptBuilder {
         )
 
         sections.add(personality.systemInstruction)
+
+        // V15: long-term memory — facts Lia remembers about the user.
+        // Injected for every engine (online and offline alike).
+        if (!memoryBlock.isNullOrBlank()) {
+            sections.add(memoryBlock)
+        }
 
         val langPolicy = when (language) {
             LanguagePreference.AUTO -> "Language Policy: Match the language of the user's message (Hindi, Hinglish, or English) naturally."

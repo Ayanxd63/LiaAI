@@ -10,7 +10,9 @@ object PersonalityPromptBuilder {
         language: LanguagePreference,
         detectedLanguage: String?,
         recap: String?,
-        assistantName: String
+        assistantName: String,
+        // V15: long-term memory — same block as the text path.
+        memoryBlock: String? = null
     ): String {
         val sections = mutableListOf<String>()
 
@@ -24,6 +26,11 @@ object PersonalityPromptBuilder {
 
         // (c) Personality instruction
         sections.add(personality.systemInstruction)
+
+        // V15 (c2): long-term memory — facts Lia remembers about the user.
+        if (!memoryBlock.isNullOrBlank()) {
+            sections.add(memoryBlock)
+        }
 
         // (d) Language policy
         val langPolicy = when (language) {

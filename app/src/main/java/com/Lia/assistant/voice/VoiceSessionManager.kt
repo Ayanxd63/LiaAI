@@ -21,13 +21,18 @@ import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.ChatHistoryMessage
 import com.Lia.assistant.data.ChatHistoryStore
 import com.Lia.assistant.data.ChatSession
+import com.Lia.assistant.data.EnginePreferences
+import com.Lia.assistant.data.FactMemoryStore
 import com.Lia.assistant.data.LanguagePreference
+import com.Lia.assistant.data.MemoryCapture
+import com.Lia.assistant.data.MemoryFact
 import com.Lia.assistant.data.Personality
 import com.Lia.assistant.data.PersonalityRepository
 import com.Lia.assistant.forge.ForgeController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,15 +40,67 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicLong
 
 object VoiceSessionManager {
     private const val TAG = "VoiceSessionManager"
 
-    private val scope = CoroutineScope(Dispatchers.IO)
+    // V15 (voice-bug fix): SupervisorJob — one failed child must never
+    // cancel the whole scope again. Before V15 a plain Job meant a
+    // single uncaught exception in ANY voice-turn coroutine silently
+    // killed every later launch, and the overlay wedged on
+    // "Soch rahi hun…" forever with no error and no recovery.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessionMutex = Mutex()
     private val sessionEpoch = AtomicLong(0)
+
+    /**
+     * V15 (voice-bug fix) — the thinking watchdog. If Lia stays on
+     * "Soch rahi hun…" for 25s, something in the reply chain died
+     * (recognition result lost, scope dead, request hung). The watchdog
+     * is Handler-based on purpose: it does NOT depend on the coroutine
+     * scope, so it fires even when the scope itself is the problem.
+     * It is armed when listening ends (onEndOfSpeech) and disarmed the
+     * moment a reply starts speaking, a new listening round starts, or
+     * the session stops.
+     */
+    private const val THINKING_WATCHDOG_MS = 25_000L
+
+    /** V15: deadline for one voice round-trip (see handleNoKeyTranscript). */
+    private const val VOICE_REPLY_TIMEOUT_MS = 20_000L
+
+    /** V15: short retry waits for voice (text chat uses 2s/5s/10s). */
+    private val VOICE_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L)
+
+    /** V15: short spoken replies from the tiny offline model (faster). */
+    private const val OFFLINE_VOICE_PREDICT_LENGTH = 128
+
+    private val thinkingWatchdogRunnable = Runnable {
+        if (!_isActive.value || !noKeyMode) return@Runnable
+        if (_state.value != NovaOrbState.THINKING) return@Runnable
+        // Still thinking after 25s — the turn died somewhere. Say so
+        // plainly and go back to listening instead of hanging forever.
+        Log.w(TAG, "Thinking watchdog fired — voice turn never completed")
+        _statusText.value = "Zyada der ho gayi — dobara bolo."
+        _state.value = NovaOrbState.LISTENING
+        startNoKeyListening()
+    }
+
+    private fun armThinkingWatchdog() {
+        mainHandler.removeCallbacks(thinkingWatchdogRunnable)
+        mainHandler.postDelayed(thinkingWatchdogRunnable, THINKING_WATCHDOG_MS)
+    }
+
+    private fun disarmThinkingWatchdog() {
+        mainHandler.removeCallbacks(thinkingWatchdogRunnable)
+    }
+
+    // V15: a fact the auto-rules proposed in voice, waiting for a
+    // spoken "Haan" / "Nahi". Same rules as text chat — never silent.
+    @Volatile
+    private var pendingMemoryFact: MemoryFact? = null
 
     private val _state = MutableStateFlow(NovaOrbState.IDLE)
     val state: StateFlow<NovaOrbState> = _state.asStateFlow()
@@ -248,6 +305,9 @@ object VoiceSessionManager {
 
     /** Start one listening round on the main thread (recognizer rule). */
     private fun startNoKeyListening() {
+        // A new listening round means the previous turn ended one way
+        // or another — the watchdog's job is done.
+        disarmThinkingWatchdog()
         if (!_isActive.value || !noKeyMode || _muted.value || noKeySpeaking) return
         mainHandler.post {
             if (!_isActive.value || !noKeyMode || _muted.value || noKeySpeaking) return@post
@@ -327,6 +387,9 @@ object VoiceSessionManager {
             noKeyListening = false
             _state.value = NovaOrbState.THINKING
             _statusText.value = "Soch rahi hun…"
+            // V15: arm the watchdog — if no reply ever comes back, the
+            // overlay recovers on its own instead of hanging here.
+            armThinkingWatchdog()
         }
 
         override fun onError(error: Int) {
@@ -382,6 +445,50 @@ object VoiceSessionManager {
         }
         _state.value = NovaOrbState.THINKING
         _statusText.value = "Soch rahi hun…"
+        armThinkingWatchdog()
+
+        // V15: long-term memory — same rules as text chat, spoken.
+        val ctx0 = appContext
+        if (ctx0 != null && FactMemoryStore.isEnabled(ctx0)) {
+            val pending = pendingMemoryFact
+            if (pending != null) {
+                if (MemoryCapture.isYes(trimmed)) {
+                    FactMemoryStore.saveFact(ctx0, pending)
+                    pendingMemoryFact = null
+                    ConversationMemory.recordTurn(
+                        MemoryRole.ASSISTANT,
+                        "Yaad rakh liya: ${pending.text}"
+                    )
+                    speakNoKey("Yaad rakh liya, jan! ${pending.text}") { startNoKeyListening() }
+                    return
+                }
+                if (MemoryCapture.isNo(trimmed)) {
+                    pendingMemoryFact = null
+                    speakNoKey("Theek hai, yaad nahi rakhungi.") { startNoKeyListening() }
+                    return
+                }
+                pendingMemoryFact = null
+            }
+            when (val capture = MemoryCapture.analyze(trimmed)) {
+                is MemoryCapture.Capture.Save -> {
+                    FactMemoryStore.saveFact(ctx0, capture.fact)
+                    ConversationMemory.recordTurn(
+                        MemoryRole.ASSISTANT,
+                        "Yaad rakh liya: ${capture.fact.text}"
+                    )
+                    speakNoKey("Yaad rakh liya, jan! ${capture.fact.text}") { startNoKeyListening() }
+                    return
+                }
+                is MemoryCapture.Capture.Confirm -> {
+                    pendingMemoryFact = capture.fact
+                    speakNoKey("Yaad rakhun? ${capture.fact.text}") { startNoKeyListening() }
+                    return
+                }
+                is MemoryCapture.Capture.None -> {
+                    // Normal message — falls through to the engine below.
+                }
+            }
+        }
 
         // Device command spoken in voice mode? Run it LOCALLY right away
         // (same as the Live path), then SPEAK the confirmation.
@@ -405,34 +512,83 @@ object VoiceSessionManager {
         }
 
         scope.launch {
-            val ctx = appContext ?: return@launch
-            val personality = PersonalityRepository.getPersonality(ctx)
-            val language = PersonalityRepository.getLanguage(ctx)
-            val assistantName = PersonalityRepository.getAssistantName(ctx)
-            _currentPersonality.value = personality
-            _currentLanguage.value = language
-            val systemInstruction = PersonalityPromptBuilder.build(
-                personality = personality,
-                language = language,
-                detectedLanguage = _detectedLanguage.value,
-                recap = ConversationMemory.recap(),
-                assistantName = assistantName
-            )
-            val history = ConversationMemory.snapshot().map { turn ->
-                ChatTurn(isUser = turn.role == MemoryRole.USER, text = turn.text)
-            }
-            val result = PollinationsClient.chat(systemInstruction, history) { attempt ->
-                _statusText.value = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
-            }
-            when (result) {
-                is ChatReplyResult.Success -> {
-                    ConversationMemory.recordTurn(MemoryRole.ASSISTANT, result.text)
-                    speakNoKey(result.text) { startNoKeyListening() }
+            try {
+                val ctx = appContext ?: return@launch
+                val personality = PersonalityRepository.getPersonality(ctx)
+                val language = PersonalityRepository.getLanguage(ctx)
+                val assistantName = PersonalityRepository.getAssistantName(ctx)
+                _currentPersonality.value = personality
+                _currentLanguage.value = language
+                val systemInstruction = PersonalityPromptBuilder.build(
+                    personality = personality,
+                    language = language,
+                    detectedLanguage = _detectedLanguage.value,
+                    recap = ConversationMemory.recap(),
+                    assistantName = assistantName,
+                    memoryBlock = FactMemoryStore.memoryBlock(ctx)
+                )
+                val history = ConversationMemory.snapshot().map { turn ->
+                    ChatTurn(isUser = turn.role == MemoryRole.USER, text = turn.text)
                 }
-                is ChatReplyResult.Error -> {
-                    ConversationMemory.recordTurn(MemoryRole.ASSISTANT, result.message)
-                    speakNoKey(result.message) { startNoKeyListening() }
+                val useOffline = EnginePreferences.useOffline(ctx)
+                val fallbackEnabled = EnginePreferences.isOfflineFallbackEnabled(ctx)
+                val offlineReady = OfflineModelManager.isModelReady(ctx)
+
+                // 20s deadline for the whole round-trip: a hung request
+                // must never wedge the overlay (V14 bug #2).
+                var result: ChatReplyResult? = withTimeoutOrNull(VOICE_REPLY_TIMEOUT_MS) {
+                    if (useOffline) {
+                        OfflineLlmClient.chat(
+                            ctx, systemInstruction, trimmed,
+                            predictLength = OFFLINE_VOICE_PREDICT_LENGTH
+                        )
+                    } else {
+                        PollinationsClient.chat(
+                            systemInstruction, history,
+                            onRetrying = { attempt ->
+                                _statusText.value = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
+                            },
+                            retryDelaysMs = VOICE_RETRY_DELAYS_MS
+                        )
+                    }
                 }
+
+                // Fast offline fallback (V15): the online engine is
+                // rate-limited or unreachable AND a verified model is on
+                // the phone — a quick offline reply beats a long wait.
+                if (result is ChatReplyResult.Error &&
+                    (result.isRateLimited || result.isNetworkError) &&
+                    fallbackEnabled && offlineReady && !useOffline
+                ) {
+                    _statusText.value = "Offline jawab — net slow tha."
+                    result = withTimeoutOrNull(VOICE_REPLY_TIMEOUT_MS) {
+                        OfflineLlmClient.chat(
+                            ctx, systemInstruction, trimmed,
+                            predictLength = OFFLINE_VOICE_PREDICT_LENGTH
+                        )
+                    }
+                }
+
+                when (val finalResult = result) {
+                    is ChatReplyResult.Success -> {
+                        ConversationMemory.recordTurn(MemoryRole.ASSISTANT, finalResult.text)
+                        speakNoKey(finalResult.text) { startNoKeyListening() }
+                    }
+                    is ChatReplyResult.Error -> {
+                        ConversationMemory.recordTurn(MemoryRole.ASSISTANT, finalResult.message)
+                        speakNoKey(finalResult.message) { startNoKeyListening() }
+                    }
+                    null -> {
+                        // The 20s deadline hit — say so and listen again.
+                        speakNoKey("Free AI abhi busy hai — dobara try karo.") { startNoKeyListening() }
+                    }
+                }
+            } catch (e: Exception) {
+                // V14 bug #1: an uncaught exception here used to kill the
+                // whole scope. Now the turn fails loudly and listening
+                // resumes — the user always gets an answer or an error.
+                Log.w(TAG, "No-key voice turn failed", e)
+                speakNoKey("Kuch garbar ho gayi — dobara try karo.") { startNoKeyListening() }
             }
         }
     }
@@ -440,12 +596,23 @@ object VoiceSessionManager {
     /**
      * Speak [text] with the cute system TTS voice, then run [onDone].
      * The recognizer stays off while speaking so Lia never hears herself.
-     * If TTS is not ready yet, skip speaking and go straight to [onDone]
-     * — the reply is still in memory, and listening resumes.
+     *
+     * V15 (voice-bug fix #3): the old code ignored `speak()`'s return
+     * value — on ERROR no utterance callback ever fired, `noKeySpeaking`
+     * stayed true forever, and listening never restarted. Now an ERROR
+     * return (or a TTS that is not ready yet) shows the reply as status
+     * text so the user can READ it, resets the speaking flag, and goes
+     * straight to [onDone]. A reply is never silently swallowed again —
+     * including one that arrives before TTS init finishes.
      */
     private fun speakNoKey(text: String, onDone: (() -> Unit)? = null) {
+        // A reply arrived — the turn is over, watchdog off.
+        disarmThinkingWatchdog()
         val tts = noKeyTts
         if (tts == null || !noKeyTtsReady) {
+            // TTS cannot speak: show the reply so it is not lost.
+            _statusText.value = text.take(200)
+            _state.value = NovaOrbState.LISTENING
             onDone?.invoke()
             return
         }
@@ -469,12 +636,22 @@ object VoiceSessionManager {
                 onDone?.invoke()
             }
         })
-        tts.speak(
+        val speakResult = tts.speak(
             text,
             TextToSpeech.QUEUE_FLUSH,
             null,
             "lia-nokey-${System.currentTimeMillis()}"
         )
+        if (speakResult == TextToSpeech.ERROR) {
+            // The engine refused the utterance: no callback will ever
+            // fire, so recover here instead of wedging on "speaking".
+            Log.w(TAG, "No-key TTS speak() returned ERROR — showing reply as text")
+            noKeySpeaking = false
+            _amplitude.value = 0f
+            _statusText.value = text.take(200)
+            _state.value = NovaOrbState.LISTENING
+            onDone?.invoke()
+        }
     }
 
     private suspend fun connectSession(isResuming: Boolean) {
@@ -510,7 +687,9 @@ object VoiceSessionManager {
             language = language,
             detectedLanguage = _detectedLanguage.value,
             recap = recap,
-            assistantName = assistantName
+            assistantName = assistantName,
+            // V15: long-term memory, same block as the no-key path.
+            memoryBlock = FactMemoryStore.memoryBlock(currentContext)
         )
 
         val liveListener = object : GeminiLiveClient.Listener {
@@ -751,6 +930,13 @@ object VoiceSessionManager {
         reconnectJob = null
         silenceWatchdogJob?.cancel()
         silenceWatchdogJob = null
+        // V15: the thinking watchdog belongs to this session only.
+        disarmThinkingWatchdog()
+        pendingMemoryFact = null
+        // V15: unload the offline model with the session (frees ~0.7 GB
+        // and resets the native chat history, matching the
+        // ConversationMemory.clear() below).
+        OfflineLlmClient.unloadNow()
 
         // V12 no-key cleanup: cancel + destroy the recognizer and stop +
         // shut down TTS, so nothing keeps the mic after the session ends

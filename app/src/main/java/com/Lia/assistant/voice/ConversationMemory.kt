@@ -1,5 +1,7 @@
 package com.Lia.assistant.voice
 
+import com.Lia.assistant.data.ChatHistoryMessage
+
 enum class MemoryRole {
     USER,
     ASSISTANT
@@ -33,6 +35,30 @@ object ConversationMemory {
     fun snapshot(): List<MemoryTurn> {
         synchronized(lock) {
             return turns.toList()
+        }
+    }
+
+    /**
+     * V15: seed the short-term memory from the LATEST saved session
+     * (V13 persisted history), so a fresh app start keeps continuity
+     * with the last conversation — up to 12 recent turns. Called once
+     * at startup, off the main thread, from NovaAppState.
+     */
+    fun seedFromSession(messages: List<ChatHistoryMessage>) {
+        val seedTurns = messages
+            .takeLast(MAX_TURNS)
+            .mapNotNull { msg ->
+                val role = when (msg.role) {
+                    "user" -> MemoryRole.USER
+                    "assistant" -> MemoryRole.ASSISTANT
+                    else -> null
+                } ?: return@mapNotNull null
+                MemoryTurn(role, msg.text)
+            }
+        if (seedTurns.isEmpty()) return
+        synchronized(lock) {
+            turns.clear()
+            turns.addAll(seedTurns)
         }
     }
 

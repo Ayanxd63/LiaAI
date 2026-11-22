@@ -18,6 +18,19 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # V15: the offline LLM needs the llama.cpp C++ sources. They are
+      # NOT vendored in this repo (thousands of files); CI clones them
+      # once, at the same pinned commit as the vendored llama-lib binding
+      # (see llama-lib/NOTICE.md). Shallow clone of one commit only.
+      - name: Clone llama.cpp sources (offline engine)
+        run: |
+          git init llama.cpp
+          cd llama.cpp
+          git remote add origin https://github.com/ggerganov/llama.cpp.git
+          git fetch --depth 1 origin e300919cc704ddde3a8a8346a8714f57eeeee71b
+          git checkout FETCH_HEAD
+          git rev-parse HEAD
+
       - name: Build directDebug APK
         run: ./gradlew assembleDirectDebug --stacktrace
 

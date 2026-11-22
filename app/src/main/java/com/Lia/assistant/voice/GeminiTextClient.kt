@@ -17,7 +17,17 @@ data class ChatTurn(
 
 sealed class ChatReplyResult {
     data class Success(val text: String) : ChatReplyResult()
-    data class Error(val message: String) : ChatReplyResult()
+
+    /**
+     * V15: the flags let callers tell a rate-limit / network failure
+     * (worth a fast offline fallback) from a hard failure (bad key,
+     * empty reply) that must NOT fall back silently.
+     */
+    data class Error(
+        val message: String,
+        val isRateLimited: Boolean = false,
+        val isNetworkError: Boolean = false
+    ) : ChatReplyResult()
 }
 
 object GeminiTextClient {

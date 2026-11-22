@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  V15 (security P0) — auto-backup rules.
+  The encrypted credential store (lia_secure_prefs) must NEVER be
+  included in a Google Drive backup: a restored backup on another
+  device cannot decrypt it anyway (Keystore keys do not travel), and
+  the file must not leave the phone. Everything else — chat history,
+  settings, facts — keeps backing up exactly as before.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="lia_secure_prefs.xml" />
+</full-backup-content>

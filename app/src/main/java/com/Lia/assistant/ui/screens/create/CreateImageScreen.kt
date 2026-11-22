@@ -40,6 +40,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,6 +68,7 @@ import com.Lia.assistant.voice.GeminiImageClient
 import com.Lia.assistant.voice.ImageGenResult
 import com.Lia.assistant.voice.PollinationsClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -98,6 +100,19 @@ fun CreateImageScreen(
     var generatedMimeType by remember { mutableStateOf("image/png") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+
+    // V15 (fast images): elapsed-seconds counter while Flux works, so
+    // the wait feels alive instead of frozen — and a one-tap retry when
+    // the free tier is busy, instead of a dead end.
+    var generatingSeconds by remember { mutableStateOf(0) }
+    LaunchedEffect(isGenerating) {
+        if (!isGenerating) return@LaunchedEffect
+        generatingSeconds = 0
+        while (true) {
+            delay(1_000L)
+            generatingSeconds++
+        }
+    }
 
     // Photo picker — the standard ActivityResultContracts.GetContent route
     // (same rememberLauncherForActivityResult pattern PermissionsScreen
@@ -337,11 +352,17 @@ fun CreateImageScreen(
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = "Lia is drawing your image…",
+                    text = "Lia is drawing your image… (${generatingSeconds}s)",
                     fontSize = 14.sp,
                     color = colors.textSecondary
                 )
             }
+            Text(
+                text = "Flux free tier kabhi kabhi busy hota hai — 30 second tak wait karo.",
+                fontSize = 12.sp,
+                color = colors.textSecondary,
+                modifier = Modifier.padding(start = 36.dp, top = 4.dp)
+            )
         }
 
         errorMessage?.let { message ->
@@ -351,6 +372,19 @@ fun CreateImageScreen(
                 fontSize = 14.sp,
                 color = colors.error
             )
+            // V15: a busy free tier is a "try again in a moment" error,
+            // not a dead end — one tap retries with the same prompt.
+            val isBusy = message.contains("busy", ignoreCase = true) ||
+                message.contains("Bohat sare log")
+            if (isBusy) {
+                Spacer(modifier = Modifier.height(12.dp))
+                NovaButton(
+                    text = "Dobara try karo",
+                    onClick = { generate() },
+                    type = NovaButtonType.SECONDARY,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
 
         // Generated image, full width, with Save + Share

@@ -12,7 +12,9 @@
 </head>
 <body>
     <div id="canvas-container"></div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- V15: three.js is bundled locally (assets/forge/three.min.js,
+         MIT) — the Forge scene no longer needs the internet to load. -->
+    <script src="three.min.js"></script>
     <script src="forge.js"></script>
 </body>
 </html>

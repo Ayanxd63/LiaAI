@@ -141,14 +141,16 @@ class FloatingCharacterService : Service() {
         val sizePx = (BUBBLE_SIZE_DP * metrics.density).toInt()
         val tapSlopPx = (TAP_SLOP_DP * metrics.density)
 
+        // V15: headphones is the default character — the observer below
+        // replaces these with the stored choice as soon as it loads.
         val closed = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setImageResource(LiaCharacter.SAREE.closedRes)
+            setImageResource(LiaCharacter.HEADPHONES.closedRes)
         }
         val open = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             alpha = 0f
-            setImageResource(LiaCharacter.SAREE.openRes)
+            setImageResource(LiaCharacter.HEADPHONES.openRes)
         }
         closedImage = closed
         openImage = open

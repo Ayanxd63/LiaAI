@@ -107,6 +107,14 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     implementation("com.alphacephei:vosk-android:0.3.45")
 
+    // V15: Keystore-backed encrypted credential storage (security-crypto
+    // 1.1.0, stable July 2025 — verified on Google Maven 2026-11-22).
+    implementation("androidx.security:security-crypto:1.1.0")
+    // V15: offline on-device LLM — vendored llama.cpp Android binding.
+    // The native library builds from the CI-cloned llama.cpp sources
+    // (see .github/workflows/android.yml and llama-lib/NOTICE.md).
+    implementation(project(":llama-lib"))
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("org.json:json:20240303")

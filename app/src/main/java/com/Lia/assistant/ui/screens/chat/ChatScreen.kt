@@ -58,6 +58,9 @@ import com.Lia.assistant.data.ChatHistoryStore
 import com.Lia.assistant.data.ChatSession
 import com.Lia.assistant.data.ElevenLabsStore
 import com.Lia.assistant.data.EnginePreferences
+import com.Lia.assistant.data.FactMemoryStore
+import com.Lia.assistant.data.MemoryCapture
+import com.Lia.assistant.data.MemoryFact
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.data.Personality
 import com.Lia.assistant.forge.ForgeController
@@ -79,6 +82,8 @@ import com.Lia.assistant.voice.ElevenLabsClient
 import com.Lia.assistant.voice.ElevenLabsResult
 import com.Lia.assistant.voice.GeminiTextClient
 import com.Lia.assistant.voice.NovaOrbState
+import com.Lia.assistant.voice.OfflineLlmClient
+import com.Lia.assistant.voice.OfflineModelManager
 import com.Lia.assistant.voice.PollinationsClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -148,15 +153,26 @@ fun ChatScreen(
 
     // V13: reopening a saved chat replaces the welcome message with the
     // real turns, so the conversation continues where it stopped.
+    // V15 (chat-continuity fix, ayan 2026-11-22): opening the Chat tab
+    // with NO sessionId used to show a fresh empty chat — the old
+    // messages were only reachable via History. Now it loads the
+    // LATEST saved session (if any) and continues THAT session, so the
+    // old messages stay visible above. No saved session = the fresh
+    // welcome behaviour, unchanged. The JSON load runs on IO.
     LaunchedEffect(sessionId) {
-        if (sessionId == null) return@LaunchedEffect
-        val saved = ChatHistoryStore.loadSessions(context)
-            .firstOrNull { it.id == sessionId }
-        if (saved != null && saved.messages.isNotEmpty()) {
-            currentSessionId = saved.id
+        val sessions = withContext(Dispatchers.IO) {
+            runCatching { ChatHistoryStore.loadSessions(context) }.getOrDefault(emptyList())
+        }
+        val target = if (sessionId != null) {
+            sessions.firstOrNull { it.id == sessionId }
+        } else {
+            sessions.firstOrNull()
+        }
+        if (target != null && target.messages.isNotEmpty()) {
+            currentSessionId = target.id
             messages.clear()
             messages.addAll(
-                saved.messages.map {
+                target.messages.map {
                     ChatMessage(text = it.text, isUser = it.role == "user")
                 }
             )
@@ -200,6 +216,20 @@ fun ChatScreen(
     // Short user-readable note when ElevenLabs speaking fails (e.g. bad key,
     // quota used up). Shown in the header subtitle; never a stack trace.
     var elevenNote by remember { mutableStateOf<String?>(null) }
+
+    // V15: a fact the auto-rules proposed, waiting for "Yaad rakhun?
+    // Yes / No". Saved only on yes, dropped on no — never silent.
+    var pendingMemoryFact by remember { mutableStateOf<MemoryFact?>(null) }
+
+    /** V15: start a genuinely fresh chat (header "New chat" action). */
+    fun startNewChat() {
+        currentSessionId = null
+        pendingMemoryFact = null
+        retryNote = null
+        elevenNote = null
+        messages.clear()
+        messages.add(ChatMessage(text = welcomeText, isUser = false))
+    }
 
     // TTS lifecycle
     var tts: TextToSpeech? by remember { mutableStateOf(null) }
@@ -284,10 +314,15 @@ fun ChatScreen(
         }
     }
 
-    // Auto-scroll on new message
-    LaunchedEffect(messages.size, isTyping) {
+    // Auto-scroll on new message; during streaming the bubble grows
+    // in place, so scroll (no animation) on every text change too.
+    LaunchedEffect(messages.size, isTyping, messages.lastOrNull()?.text?.length) {
         if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+            if (messages.last().isStreaming) {
+                listState.scrollToItem(messages.size - 1)
+            } else {
+                listState.animateScrollToItem(messages.size - 1)
+            }
         }
     }
 
@@ -299,6 +334,67 @@ fun ChatScreen(
         inputText = ""
         // V13: the user said something — this chat now has a session.
         persistSession()
+
+        // V15: long-term memory — answer a pending "Yaad rakhun?" first,
+        // then check for a new memory command. Both return early (no
+        // engine call); a non-yes/no answer drops the pending question
+        // and is treated as a normal message.
+        val pending = pendingMemoryFact
+        if (pending != null) {
+            if (MemoryCapture.isYes(trimmed)) {
+                FactMemoryStore.saveFact(context, pending)
+                pendingMemoryFact = null
+                messages.add(
+                    ChatMessage(
+                        text = "Yaad rakh liya 💖 \"${pending.text}\"",
+                        isUser = false
+                    )
+                )
+                persistSession()
+                return
+            }
+            if (MemoryCapture.isNo(trimmed)) {
+                pendingMemoryFact = null
+                messages.add(
+                    ChatMessage(
+                        text = "Theek hai, yaad nahi rakhungi.",
+                        isUser = false
+                    )
+                )
+                persistSession()
+                return
+            }
+            pendingMemoryFact = null
+        }
+        if (FactMemoryStore.isEnabled(context)) {
+            when (val capture = MemoryCapture.analyze(trimmed)) {
+                is MemoryCapture.Capture.Save -> {
+                    FactMemoryStore.saveFact(context, capture.fact)
+                    messages.add(
+                        ChatMessage(
+                            text = "Yaad rakh liya 💖 \"${capture.fact.text}\"",
+                            isUser = false
+                        )
+                    )
+                    persistSession()
+                    return
+                }
+                is MemoryCapture.Capture.Confirm -> {
+                    pendingMemoryFact = capture.fact
+                    messages.add(
+                        ChatMessage(
+                            text = "Yaad rakhun? \"${capture.fact.text}\"",
+                            isUser = false
+                        )
+                    )
+                    persistSession()
+                    return
+                }
+                is MemoryCapture.Capture.None -> {
+                    // Normal message — falls through to the engine below.
+                }
+            }
+        }
 
         // Check Website Forge intent
         val forgePrompt = ForgeIntent.extract(trimmed)
@@ -337,9 +433,15 @@ fun ChatScreen(
             return
         }
 
-        // V12: call the selected engine. Pollinations is the default —
+        // V12/V15: call the selected engine. Pollinations is the default —
         // free, no key, works the moment the app opens. Gemini is used
         // only when the user added a key AND picked Gemini in Settings.
+        // OFFLINE is the on-device model (no network, no key).
+        // V15 (fast replies): the reply STREAMS in live — Pollinations
+        // tokens and offline tokens fill the bubble as they arrive,
+        // instead of waiting for the whole answer. A rate-limited or
+        // unreachable online engine falls back to a quick offline reply
+        // at once (with a plain-language label) instead of a long wait.
         isTyping = true
         retryNote = null
         elevenNote = null
@@ -348,18 +450,48 @@ fun ChatScreen(
             val systemInstruction = ChatPromptBuilder.build(
                 personality = appState.personality,
                 language = appState.language,
-                assistantName = appState.assistantName
+                assistantName = appState.assistantName,
+                memoryBlock = FactMemoryStore.memoryBlock(context)
             )
 
             val history = messages.map { ChatTurn(isUser = it.isUser, text = it.text) }
             val useGemini = EnginePreferences.useGemini(context)
+            val useOffline = EnginePreferences.useOffline(context)
+            val fallbackEnabled = EnginePreferences.isOfflineFallbackEnabled(context)
+            val offlineReady = OfflineModelManager.isModelReady(context)
+
+            // The streaming placeholder: created on Main first, then
+            // filled token by token as the reply arrives.
+            val placeholderId = java.util.UUID.randomUUID().toString()
+            withContext(Dispatchers.Main) {
+                messages.add(
+                    ChatMessage(id = placeholderId, text = "", isUser = false, isStreaming = true)
+                )
+            }
+            fun updatePlaceholder(text: String) {
+                // Stream callbacks run on IO — hop to Main for state.
+                scope.launch {
+                    val idx = messages.indexOfFirst { it.id == placeholderId }
+                    if (idx != -1) {
+                        messages[idx] = messages[idx].copy(text = text)
+                    }
+                }
+            }
             val onRetrying: (Int) -> Unit = { attempt ->
                 // reply() runs on IO; hop to Main to update Compose state.
                 scope.launch {
                     retryNote = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
                 }
             }
-            val result = if (useGemini) {
+
+            var result: ChatReplyResult = if (useOffline) {
+                OfflineLlmClient.chat(
+                    context,
+                    systemInstruction,
+                    trimmed,
+                    onToken = { updatePlaceholder(it) }
+                )
+            } else if (useGemini) {
                 GeminiTextClient.reply(
                     apiKey,
                     systemInstruction,
@@ -367,46 +499,79 @@ fun ChatScreen(
                     onRetrying = onRetrying
                 )
             } else {
-                PollinationsClient.chat(
+                PollinationsClient.chatStream(
                     systemInstruction,
                     history,
+                    onToken = { updatePlaceholder(it) },
                     onRetrying = onRetrying
+                )
+            }
+
+            // Fast offline fallback: the online engine is rate-limited
+            // or unreachable AND a verified model is on the phone — a
+            // quick offline reply beats a long silent wait. The header
+            // says so in plain language (retryNote, kept for this turn).
+            var usedOfflineFallback = false
+            if (result is ChatReplyResult.Error &&
+                (result.isRateLimited || result.isNetworkError) &&
+                fallbackEnabled && offlineReady && !useOffline
+            ) {
+                usedOfflineFallback = true
+                scope.launch {
+                    retryNote = "Offline jawab — net slow tha, is liye phone se jawab de rahi hun."
+                }
+                result = OfflineLlmClient.chat(
+                    context,
+                    systemInstruction,
+                    trimmed,
+                    onToken = { updatePlaceholder(it) }
                 )
             }
 
             withContext(Dispatchers.Main) {
                 isTyping = false
-                retryNote = null
+                if (!usedOfflineFallback) retryNote = null
                 when (result) {
                     is ChatReplyResult.Success -> {
-                        // Word-by-word reveal (20ms per word)
-                        val fullReply = result.text
-                        val words = fullReply.split(" ")
-                        val placeholderId = java.util.UUID.randomUUID().toString()
-                        val msg = ChatMessage(id = placeholderId, text = "", isUser = false, isStreaming = true)
-                        messages.add(msg)
-
-                        scope.launch {
-                            val builder = StringBuilder()
-                            for (w in words) {
-                                if (builder.isNotEmpty()) builder.append(" ")
-                                builder.append(w)
-                                val idx = messages.indexOfFirst { it.id == placeholderId }
-                                if (idx != -1) {
-                                    messages[idx] = messages[idx].copy(text = builder.toString())
+                        val finalIdx = messages.indexOfFirst { it.id == placeholderId }
+                        if (finalIdx != -1) {
+                            if (messages[finalIdx].text.isBlank()) {
+                                // Non-streaming engine (Gemini): the
+                                // placeholder is still empty — keep the
+                                // old word-by-word reveal (20ms per word).
+                                val fullReply = result.text
+                                val words = fullReply.split(" ")
+                                scope.launch {
+                                    val builder = StringBuilder()
+                                    for (w in words) {
+                                        if (builder.isNotEmpty()) builder.append(" ")
+                                        builder.append(w)
+                                        val idx = messages.indexOfFirst { it.id == placeholderId }
+                                        if (idx != -1) {
+                                            messages[idx] = messages[idx].copy(text = builder.toString())
+                                        }
+                                        delay(20)
+                                    }
+                                    val doneIdx = messages.indexOfFirst { it.id == placeholderId }
+                                    if (doneIdx != -1) {
+                                        messages[doneIdx] = messages[doneIdx].copy(isStreaming = false)
+                                        // V13: the reply is complete — save the chat.
+                                        persistSession()
+                                        // ElevenLabs text-chat TTS (v10): when an
+                                        // ElevenLabs voice is selected, speak Lia's
+                                        // reply aloud with that voice. No voice
+                                        // selected → nothing auto-plays, exactly as
+                                        // before (user taps the speaker to listen).
+                                        if (ElevenLabsStore.hasSelectedVoice(context)) {
+                                            speakReply(messages[doneIdx])
+                                        }
+                                    }
                                 }
-                                delay(20)
-                            }
-                            val finalIdx = messages.indexOfFirst { it.id == placeholderId }
-                            if (finalIdx != -1) {
+                            } else {
+                                // Streamed (Pollinations / offline): the
+                                // text is already there — just finish.
                                 messages[finalIdx] = messages[finalIdx].copy(isStreaming = false)
-                                // V13: the reply is complete — save the chat.
                                 persistSession()
-                                // ElevenLabs text-chat TTS (v10): when an
-                                // ElevenLabs voice is selected, speak Lia's
-                                // reply aloud with that voice. No voice
-                                // selected → nothing auto-plays, exactly as
-                                // before (user taps the speaker to listen).
                                 if (ElevenLabsStore.hasSelectedVoice(context)) {
                                     speakReply(messages[finalIdx])
                                 }
@@ -414,6 +579,10 @@ fun ChatScreen(
                         }
                     }
                     is ChatReplyResult.Error -> {
+                        // Drop the empty streaming placeholder, then show
+                        // the friendly error bubble.
+                        val idx = messages.indexOfFirst { it.id == placeholderId }
+                        if (idx != -1) messages.removeAt(idx)
                         messages.add(
                             ChatMessage(
                                 // V13: warm Roman Urdu, never "Error: ...".
@@ -479,6 +648,25 @@ fun ChatScreen(
                     fontSize = 12.sp,
                     color = colors.textSecondary
                 )
+            }
+
+            // V15: explicit "New chat" — the Chat tab now opens the
+            // latest saved chat, so a fresh chat needs a real button.
+            if (messages.size > 1) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(colors.surfaceGlass)
+                        .clickable { startNewChat() }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "New chat",
+                        fontSize = 12.sp,
+                        color = colors.textPrimary
+                    )
+                }
             }
         }
 
@@ -580,6 +768,63 @@ fun ChatScreen(
                             color = colors.textPrimary
                         )
                     }
+                }
+                // V15: second entry point for the Prompt Generator — on
+                // Home it sits below the fold, so it must be reachable
+                // from Chat too.
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(colors.surfaceGlass)
+                        .clickable { navController.navigate("prompt_generator") }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Prompt banao ✍️",
+                        fontSize = 13.sp,
+                        color = colors.textPrimary
+                    )
+                }
+            }
+        }
+
+        // V15: "Yaad rakhun?" confirmation chips — one tap answers the
+        // pending memory question (also answerable by typing Haan/Nahi).
+        if (pendingMemoryFact != null && !isTyping) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(colors.accent)
+                        .clickable { sendMessage("Haan") }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Haan, yaad rakho 💖",
+                        fontSize = 13.sp,
+                        color = colors.onAccent
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(colors.surfaceGlass)
+                        .clickable { sendMessage("Nahi") }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Nahi",
+                        fontSize = 13.sp,
+                        color = colors.textPrimary
+                    )
                 }
             }
         }
