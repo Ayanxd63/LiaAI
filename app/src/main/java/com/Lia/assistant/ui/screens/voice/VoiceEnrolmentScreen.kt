@@ -99,6 +99,18 @@ fun VoiceEnrolmentScreen(
         }
     }
 
+    // Mic permission state + launcher — declared BEFORE recordVoiceSample
+    // (Kotlin cannot see declarations below their use point).
+    var hasMic by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val micLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> hasMic = granted }
+
     /**
      * Record a 3-second voice sample and either enrol it (save the
      * embedding as the profile) or compare it with the profile.
@@ -171,16 +183,6 @@ fun VoiceEnrolmentScreen(
             }
         }
     }
-
-    var hasMic by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                PackageManager.PERMISSION_GRANTED
-        )
-    }
-    val micLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted -> hasMic = granted }
 
     var recognizer: SpeechRecognizer? by remember { mutableStateOf<SpeechRecognizer?>(null) }
 
