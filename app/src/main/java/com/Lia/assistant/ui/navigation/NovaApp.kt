@@ -20,6 +20,7 @@ import com.Lia.assistant.data.NovaPreferences
 import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.ui.screens.about.AboutScreen
 import com.Lia.assistant.ui.screens.chat.ChatScreen
+import com.Lia.assistant.ui.screens.create.CreateImageScreen
 import com.Lia.assistant.ui.screens.debug.DebugScreen
 import com.Lia.assistant.ui.screens.forge.ForgeScreen
 import com.Lia.assistant.ui.screens.history.HistoryScreen
@@ -33,6 +34,7 @@ import com.Lia.assistant.ui.screens.profile.ProfileScreen
 import com.Lia.assistant.ui.screens.quickactions.QuickActionsScreen
 import com.Lia.assistant.ui.screens.settings.SettingsScreen
 import com.Lia.assistant.ui.screens.voice.VoiceScreen
+import com.Lia.assistant.ui.screens.write.WriteScreen
 import com.Lia.assistant.ui.theme.LocalBottomBarInset
 import com.Lia.assistant.ui.theme.nightSky
 
@@ -97,6 +99,9 @@ fun NovaApp(appState: NovaAppState) {
                     composable("about") { AboutScreen(navController) }
                     composable("debug") { DebugScreen(navController) }
                     composable("forge") { ForgeScreen(navController) }
+                    // v10: official LIA quick actions — Create Image + Write.
+                    composable("create_image") { CreateImageScreen(navController) }
+                    composable("write") { WriteScreen(navController) }
 
                     // Flavor-specific routes (e.g. accessibility disclosure in direct)
                     registerAccessibilityDisclosureRoute(navController)
