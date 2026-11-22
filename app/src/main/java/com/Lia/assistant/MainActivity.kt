@@ -17,7 +17,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import com.Lia.assistant.action.AppContext
-import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.data.VoicePlaybackSettings
 import com.Lia.assistant.forge.ForgeController
@@ -95,13 +94,14 @@ class MainActivity : ComponentActivity() {
         }
         if (intent?.getBooleanExtra(FloatingCharacterService.EXTRA_START_VOICE, false) == true) {
             // Floating bubble tapped: start voice talk. Same guards as
-            // VoiceScreen — mic permission, API key, no active session.
+            // VoiceScreen — mic permission, no active session. V12: no
+            // key is needed any more (no-key voice works on its own).
             // If any guard fails, just open the app: the user can tap
             // Talk, and VoiceScreen will ask for what's missing.
             val hasMic = ContextCompat.checkSelfPermission(
                 this, Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_GRANTED
-            if (hasMic && ApiKeyStore.hasKey(this) && !VoiceSessionManager.isActive.value) {
+            if (hasMic && !VoiceSessionManager.isActive.value) {
                 VoiceForegroundService.start(this)
             }
         }
@@ -131,10 +131,9 @@ class MainActivity : ComponentActivity() {
      * Starts a session only when ALL of these hold:
      * - listen-on-open is enabled in Voice & language settings, and
      * - no voice session is already active, and
-     * - microphone permission is already granted, and
-     * - a Gemini API key is configured (same gate as VoiceScreen's
-     *   auto-start, so a missing key never spawns a pointless error
-     *   session).
+     * - microphone permission is already granted.
+     * V12: no API key is needed any more — the no-key voice path works
+     * on its own, and a saved key just switches to Gemini Live.
      *
      * If microphone permission is NOT granted, does nothing at all: no
      * crash, no permission dialog here — the existing permission flow in
@@ -162,7 +161,6 @@ class MainActivity : ComponentActivity() {
         ) {
             return
         }
-        if (!ApiKeyStore.hasKey(this)) return
         VoiceForegroundService.start(this)
     }
 
