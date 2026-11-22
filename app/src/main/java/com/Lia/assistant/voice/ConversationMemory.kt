@@ -29,6 +29,13 @@ object ConversationMemory {
         }
     }
 
+    /** Copy of the stored turns, oldest first (max 12) — for chat clients. */
+    fun snapshot(): List<MemoryTurn> {
+        synchronized(lock) {
+            return turns.toList()
+        }
+    }
+
     fun recap(): String? {
         synchronized(lock) {
             if (turns.isEmpty()) return null
