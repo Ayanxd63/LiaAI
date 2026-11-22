@@ -17,6 +17,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import com.Lia.assistant.action.AppContext
+import com.Lia.assistant.data.AlwaysListeningPreferences
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.data.Personality
 import com.Lia.assistant.data.VoicePlaybackSettings
@@ -174,6 +175,18 @@ class MainActivity : ComponentActivity() {
         isInForeground = false
         AppVisibility.setForeground(false)
         if (!VoiceSessionManager.isActive.value) return
+
+        // V14: always-listening is ON — the user left the app on purpose
+        // and Lia is MEANT to keep working in the background. Do not stop
+        // the session, do not start the 60s timer: the foreground service
+        // owns the mic now, and the notification's "Stop listening" is
+        // the way to turn it off. Any pending background stop from an
+        // earlier onStop is cancelled, so the session is never cut short.
+        if (AlwaysListeningPreferences.isEnabled(this)) {
+            backgroundStopJob?.cancel()
+            backgroundStopJob = null
+            return
+        }
 
         // Lia herself just launched an external app (YouTube, WhatsApp,
         // Settings...): the activity goes to background BECAUSE of her own
