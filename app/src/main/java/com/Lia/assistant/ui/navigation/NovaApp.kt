@@ -17,8 +17,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.Lia.assistant.data.CrashReportStore
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.data.NovaPreferences
+import com.Lia.assistant.data.SetupWizardPreferences
 import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.ui.screens.about.AboutScreen
 import com.Lia.assistant.ui.screens.character.CHARACTER_SETTINGS_ROUTE
@@ -27,7 +29,14 @@ import com.Lia.assistant.ui.screens.elevenlabs.ElevenLabsSettingsScreen
 import com.Lia.assistant.ui.screens.keyboard.VoiceKeyboardSettingsScreen
 import com.Lia.assistant.ui.screens.prompt.PromptGeneratorScreen
 import com.Lia.assistant.ui.screens.voice.VoiceSettingsScreen
-import com.Lia.assistant.ui.screens.chat.ChatScreen
+import com.Lia.assistant.ui.screens.actions.ActionsScreen
+import com.Lia.assistant.ui.screens.backup.BackupScreen
+import com.Lia.assistant.ui.screens.debug.CrashReportScreen
+import com.Lia.assistant.ui.screens.setup.SetupWizardScreen
+import com.Lia.assistant.ui.screens.skills.SkillsScreen
+import com.Lia.assistant.ui.screens.subagents.SubAgentsScreen
+import com.Lia.assistant.ui.screens.voice.GeminiVoicePickerScreen
+import com.Lia.assistant.ui.screens.voice.VoiceEnrolmentScreen
 import com.Lia.assistant.ui.screens.create.CreateImageScreen
 import com.Lia.assistant.ui.screens.debug.DebugScreen
 import com.Lia.assistant.ui.screens.forge.ForgeScreen
@@ -56,7 +65,16 @@ fun NovaApp(appState: NovaAppState) {
     val currentRoute = navBackStackEntry?.destination?.route
 
     val hasOnboarded = NovaPreferences.getBoolean(context, NovaPreferences.Keys.HAS_ONBOARDED, false)
-    val startDestination = if (hasOnboarded) "home" else "onboarding"
+    // V16: start destination — a crash report comes first (warm
+    // next-launch screen), then the first-run setup wizard, then
+    // onboarding/home as before. The wizard never blocks a returning
+    // user: it only shows when it was never completed.
+    val startDestination = when {
+        CrashReportStore.hasUnseen(context) -> "crash_report"
+        hasOnboarded && !SetupWizardPreferences.isDone(context) -> "setup_wizard"
+        hasOnboarded -> "home"
+        else -> "onboarding"
+    }
 
     val bottomBarRoutes = setOf("home", "chat", "history", "settings")
     val showBottomBar = currentRoute in bottomBarRoutes
@@ -135,6 +153,16 @@ fun NovaApp(appState: NovaAppState) {
                     // V15: offline AI model manager + long-term memory.
                     composable("offline_model") { OfflineModelScreen(navController) }
                     composable("memory") { MemoryScreen(navController) }
+                    // V16: setup wizard, voice picker + enrolment, skills,
+                    // actions, sub-agents, backup, crash reports.
+                    composable("setup_wizard") { SetupWizardScreen(navController, appState) }
+                    composable("voice_picker") { GeminiVoicePickerScreen(navController, appState) }
+                    composable("voice_enrolment") { VoiceEnrolmentScreen(navController) }
+                    composable("skills") { SkillsScreen(navController) }
+                    composable("actions") { ActionsScreen(navController) }
+                    composable("sub_agents") { SubAgentsScreen(navController) }
+                    composable("backup") { BackupScreen(navController) }
+                    composable("crash_report") { CrashReportScreen(navController) }
 
                     // Flavor-specific routes (e.g. accessibility disclosure in direct)
                     registerAccessibilityDisclosureRoute(navController)
