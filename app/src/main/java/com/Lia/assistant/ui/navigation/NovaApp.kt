@@ -25,6 +25,7 @@ import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.ui.screens.about.AboutScreen
 import com.Lia.assistant.ui.screens.character.CHARACTER_SETTINGS_ROUTE
 import com.Lia.assistant.ui.screens.character.CharacterSettingsScreen
+import com.Lia.assistant.ui.screens.chat.ChatScreen
 import com.Lia.assistant.ui.screens.elevenlabs.ElevenLabsSettingsScreen
 import com.Lia.assistant.ui.screens.keyboard.VoiceKeyboardSettingsScreen
 import com.Lia.assistant.ui.screens.prompt.PromptGeneratorScreen
@@ -51,6 +52,7 @@ import com.Lia.assistant.ui.screens.profile.ProfileScreen
 import com.Lia.assistant.ui.screens.quickactions.QuickActionsScreen
 import com.Lia.assistant.ui.screens.settings.MemoryScreen
 import com.Lia.assistant.ui.screens.settings.OfflineModelScreen
+import com.Lia.assistant.ui.screens.settings.OnDeviceVoiceScreen
 import com.Lia.assistant.ui.screens.settings.SettingsScreen
 import com.Lia.assistant.ui.screens.voice.VoiceScreen
 import com.Lia.assistant.ui.screens.write.WriteScreen
@@ -152,6 +154,7 @@ fun NovaApp(appState: NovaAppState) {
                     composable("voice_keyboard") { VoiceKeyboardSettingsScreen(navController) }
                     // V15: offline AI model manager + long-term memory.
                     composable("offline_model") { OfflineModelScreen(navController) }
+                    composable("on_device_voice") { OnDeviceVoiceScreen(navController) }
                     composable("memory") { MemoryScreen(navController) }
                     // V16: setup wizard, voice picker + enrolment, skills,
                     // actions, sub-agents, backup, crash reports.
