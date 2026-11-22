@@ -29,6 +29,14 @@ attribution block (Settings → On-device voice) shows the same list.
 
 Total if the user enables everything: ~455 MB of downloads.
 
+## Online voice (internet, no key)
+
+| Engine | Service | Terms | Endpoint |
+|---|---|---|---|
+| 7. Online voice (Kokoro-82M) | mesmer.tools TTS API | Free, no key, no signup; 20 generations/hour per IP; text ≤ 2,000 chars/request | `https://mesmer.tools/api/v1/tts` (docs: `https://mesmer.tools/api-tools/tts`) — voices `af_bella` (default, warm American female) and `hf_alpha` (Hindi female, auto-used for Devanagari text); quality `low` (Kokoro, default) / `high` (Azure GPT-audio narrator, falls back to Kokoro on error — the response reports `fellBack`) |
+
+Verified live 2026-11-22: `low` + `af_bella` and `low` + `hf_alpha` (Hindi text) both returned real CDN MP3s (provider kokoro, `fellBack` false); the af_bella MP3 downloads and plays (MPEG layer III, 24 kHz mono, 2.25 s). `high` + `hq_female` worked for a cached text (provider openai, `cached` true) but a fresh high render failed the same day with an Azure OpenAI 530 and fell back to Kokoro — high is an option, never the default. The 20/hour limit is server-enforced per IP; the app keeps a local counter to fail fast and shows the count in Settings. mesmer.tools is a small third-party service — it is never the only voice; the chain always falls back to Pocket, then system TTS.
+
 ## Deliberately NOT used
 
 - **Kyutai `kyutai/pocket-tts` (gated safetensors)** — gated ("auto": must

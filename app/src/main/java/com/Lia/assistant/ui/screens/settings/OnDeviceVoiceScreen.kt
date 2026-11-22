@@ -38,6 +38,9 @@ import androidx.navigation.NavController
 import com.Lia.assistant.data.LaughDetectionPreferences
 import com.Lia.assistant.data.MemoryEmbeddingPreferences
 import com.Lia.assistant.data.OnDeviceSttPreferences
+import com.Lia.assistant.data.OnlineTtsQuality
+import com.Lia.assistant.data.OnlineTtsQualityPreferences
+import com.Lia.assistant.data.OnlineTtsVoicePreferences
 import com.Lia.assistant.data.PocketTtsVoicePreferences
 import com.Lia.assistant.data.SpeakerVerifyPreferences
 import com.Lia.assistant.data.VadGatePreferences
@@ -49,6 +52,7 @@ import com.Lia.assistant.ui.components.NovaGlassCard
 import com.Lia.assistant.ui.components.NovaSettingsRow
 import com.Lia.assistant.ui.theme.LocalNovaColors
 import com.Lia.assistant.ui.theme.nightSky
+import com.Lia.assistant.voice.OnlineTtsEngine
 import com.Lia.assistant.voice.PocketTtsEngine
 import com.Lia.assistant.voice.SherpaRuntime
 import com.Lia.assistant.voice.VoiceModel
@@ -88,6 +92,15 @@ fun OnDeviceVoiceScreen(
     var pocketVoice by remember {
         mutableStateOf(PocketTtsVoicePreferences.getVoiceId(context))
     }
+    var onlineVoice by remember {
+        mutableStateOf(OnlineTtsVoicePreferences.getVoiceId(context))
+    }
+    var onlineQuality by remember {
+        mutableStateOf(OnlineTtsQualityPreferences.getQuality(context))
+    }
+    var onlineQuota by remember { mutableStateOf(OnlineTtsEngine.quotaUsed(context)) }
+    var testingOnlineVoice by remember { mutableStateOf(false) }
+    var onlineTestError by remember { mutableStateOf<String?>(null) }
     var sttOn by remember { mutableStateOf(OnDeviceSttPreferences.isEnabled(context)) }
     var vadOn by remember { mutableStateOf(VadGatePreferences.isEnabled(context)) }
     var laughOn by remember { mutableStateOf(LaughDetectionPreferences.isEnabled(context)) }
@@ -120,7 +133,10 @@ fun OnDeviceVoiceScreen(
         }
     }
 
-    LaunchedEffect(Unit) { refresh() }
+    LaunchedEffect(Unit) {
+        refresh()
+        onlineQuota = OnlineTtsEngine.quotaUsed(context)
+    }
 
     fun toggleFor(model: VoiceModel): Pair<Boolean, (Boolean) -> Unit>? {
         return when (model.id) {
@@ -200,9 +216,10 @@ fun OnDeviceVoiceScreen(
         }
 
         Text(
-            text = "Lia ki awaz aur sunna — sab phone ke andar, bina key, bina " +
-                "internet. Har engine apna model Wi-Fi par download karta hai; " +
-                "kuch bhi APK ke andar nahi aata.",
+            text = "Lia ki awaz aur sunna — on-device engines phone ke andar " +
+                "chalte hain (bina key, bina internet); internet voice ko " +
+                "internet chahiye. Har on-device engine apna model Wi-Fi par " +
+                "download karta hai; kuch bhi APK ke andar nahi aata.",
             fontSize = 13.sp,
             color = colors.textSecondary,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
@@ -229,6 +246,7 @@ fun OnDeviceVoiceScreen(
                 NovaSettingsRow(
                     title = "Lia ki awaz",
                     subtitle = when (engineChoice) {
+                        VoiceOutputEngine.ONLINE -> "Internet voice (Kokoro) — insano jaisi awaz, bina key · ~20 ghantay mein, phir offline voice"
                         VoiceOutputEngine.POCKET -> if (readyById[VoiceModelManager.MODEL_POCKET_TTS.id] == true) {
                             "On-device Lia voice — bina key, bina internet"
                         } else {
@@ -238,10 +256,11 @@ fun OnDeviceVoiceScreen(
                     },
                     icon = Icons.Default.RecordVoiceOver,
                     onClick = {
-                        val next = if (engineChoice == VoiceOutputEngine.SYSTEM) {
-                            VoiceOutputEngine.POCKET
-                        } else {
-                            VoiceOutputEngine.SYSTEM
+                        // Tap cycles: internet → on-device → system.
+                        val next = when (engineChoice) {
+                            VoiceOutputEngine.ONLINE -> VoiceOutputEngine.POCKET
+                            VoiceOutputEngine.POCKET -> VoiceOutputEngine.SYSTEM
+                            VoiceOutputEngine.SYSTEM -> VoiceOutputEngine.ONLINE
                         }
                         VoiceOutputPreferences.setEngine(context, next)
                         engineChoice = next
@@ -266,6 +285,96 @@ fun OnDeviceVoiceScreen(
                             pocketVoice = next
                         }
                     )
+                }
+                if (engineChoice == VoiceOutputEngine.ONLINE) {
+                    NovaSettingsRow(
+                        title = "Online voice",
+                        subtitle = if (onlineVoice == OnlineTtsVoicePreferences.VOICE_HINDI) {
+                            "Hindi (hf_alpha) — Hindi text ke liye"
+                        } else {
+                            "Bella (af_bella) — warm female, default"
+                        },
+                        icon = Icons.Default.RecordVoiceOver,
+                        onClick = {
+                            val next = if (onlineVoice == OnlineTtsVoicePreferences.VOICE_HINDI) {
+                                OnlineTtsVoicePreferences.VOICE_BELLA
+                            } else {
+                                OnlineTtsVoicePreferences.VOICE_HINDI
+                            }
+                            OnlineTtsVoicePreferences.setVoiceId(context, next)
+                            onlineVoice = next
+                        }
+                    )
+                    NovaSettingsRow(
+                        title = "Quality",
+                        subtitle = if (onlineQuality == OnlineTtsQuality.HIGH.apiValue) {
+                            "High (Azure narrator) — aksar fail hota hai, phir Kokoro hi bolta hai"
+                        } else {
+                            "Low (Kokoro) — tez aur reliable, default"
+                        },
+                        icon = Icons.Default.GraphicEq,
+                        onClick = {
+                            val next = if (onlineQuality == OnlineTtsQuality.HIGH.apiValue) {
+                                OnlineTtsQuality.LOW.apiValue
+                            } else {
+                                OnlineTtsQuality.HIGH.apiValue
+                            }
+                            OnlineTtsQualityPreferences.setQuality(context, next)
+                            onlineQuality = next
+                        }
+                    )
+                    Text(
+                        text = "Is ghantay mein $onlineQuota/${OnlineTtsEngine.HOURLY_LIMIT} online awazein use hui hain — " +
+                            "limit khatam hone par offline voice bolti hai. Dobara sunne gaye jumlay dobara count nahi hote.",
+                        fontSize = 13.sp,
+                        color = colors.textSecondary,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                    OnlineTtsEngine.lastFallback?.let { reason ->
+                        Text(
+                            text = "Aakhri baar high quality nahi mili: $reason",
+                            fontSize = 13.sp,
+                            color = colors.textSecondary,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                        )
+                    }
+                    Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        NovaButton(
+                            text = if (testingOnlineVoice) "Bol rahi hai…" else "Test online voice",
+                            onClick = {
+                                if (testingOnlineVoice) return@NovaButton
+                                if (!OnlineTtsEngine.isOnline(context)) {
+                                    onlineTestError = "Internet nahi hai — Wi-Fi ya mobile data on karo."
+                                    return@NovaButton
+                                }
+                                onlineTestError = null
+                                testingOnlineVoice = true
+                                OnlineTtsEngine.speak(
+                                    context,
+                                    scope,
+                                    "Assalam-o-Alaikum! Main Lia hun — internet wali awaz, insano jaisi, bina key ke.",
+                                    onDone = {
+                                        testingOnlineVoice = false
+                                        onlineQuota = OnlineTtsEngine.quotaUsed(context)
+                                    },
+                                    onError = { error ->
+                                        testingOnlineVoice = false
+                                        onlineTestError = error.message
+                                            ?: "Online voice nahi bol saki."
+                                        onlineQuota = OnlineTtsEngine.quotaUsed(context)
+                                    }
+                                )
+                            }
+                        )
+                    }
+                    onlineTestError?.let { message ->
+                        Text(
+                            text = message,
+                            fontSize = 13.sp,
+                            color = colors.error,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                        )
+                    }
                 }
             }
         }
@@ -444,7 +553,8 @@ fun OnDeviceVoiceScreen(
             text = "Attribution: Lia voice — Kyutai Pocket TTS (CC-BY-4.0) via " +
                 "sherpa-onnx (Apache-2.0). Moonshine STT — MIT. Silero VAD — " +
                 "MIT. ERes2Net speaker embedding — Apache-2.0. Zipformer audio " +
-                "tagging — Apache-2.0. MiniLM embeddings — Apache-2.0.",
+                "tagging — Apache-2.0. MiniLM embeddings — Apache-2.0. " +
+                "Online voice — Kokoro-82M via mesmer.tools (free, no key, 20/hour).",
             fontSize = 12.sp,
             color = colors.textSecondary,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
