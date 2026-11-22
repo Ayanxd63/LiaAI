@@ -26,6 +26,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -50,6 +52,7 @@ import com.Lia.assistant.action.AppContext
 import com.Lia.assistant.action.DeviceActions
 import com.Lia.assistant.action.DeviceCommandParser
 import com.Lia.assistant.data.ApiKeyStore
+import com.Lia.assistant.data.ElevenLabsStore
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.forge.ForgeIntent
@@ -64,6 +67,9 @@ import com.Lia.assistant.ui.theme.nightSky
 import com.Lia.assistant.voice.ChatPromptBuilder
 import com.Lia.assistant.voice.ChatReplyResult
 import com.Lia.assistant.voice.ChatTurn
+import com.Lia.assistant.voice.ElevenLabsAudioPlayer
+import com.Lia.assistant.voice.ElevenLabsClient
+import com.Lia.assistant.voice.ElevenLabsResult
 import com.Lia.assistant.voice.GeminiTextClient
 import com.Lia.assistant.voice.NovaOrbState
 import kotlinx.coroutines.Dispatchers
@@ -71,6 +77,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
+
+/** Cap on characters sent to ElevenLabs per reply (free-tier friendly). */
+private const val MAX_ELEVENLABS_TTS_CHARS = 1000
 
 @Composable
 fun ChatScreen(
@@ -96,6 +105,12 @@ fun ChatScreen(
     var isTyping by remember { mutableStateOf(false) }
     // Shown under the header while a reply is being retried after overload.
     var retryNote by remember { mutableStateOf<String?>(null) }
+    // ElevenLabs (v10): id of the chat reply currently playing via ElevenLabs,
+    // or null when none is playing. Also drives the speaker toggle icon.
+    var elevenLabsPlayingId by remember { mutableStateOf<String?>(null) }
+    // Short user-readable note when ElevenLabs speaking fails (e.g. bad key,
+    // quota used up). Shown in the header subtitle; never a stack trace.
+    var elevenNote by remember { mutableStateOf<String?>(null) }
 
     // TTS lifecycle
     var tts: TextToSpeech? by remember { mutableStateOf(null) }
@@ -106,9 +121,66 @@ fun ChatScreen(
             }
         }
         tts = ttsInstance
+        ElevenLabsAudioPlayer.onPlaybackFinished = { elevenLabsPlayingId = null }
         onDispose {
+            ElevenLabsAudioPlayer.onPlaybackFinished = null
+            ElevenLabsAudioPlayer.stop()
             ttsInstance.stop()
             ttsInstance.shutdown()
+        }
+    }
+
+    /**
+     * Speak one assistant reply out loud.
+     *
+     * ElevenLabs voice selected → synthesize the reply with ElevenLabs and
+     * play the MP3. No ElevenLabs voice selected → exactly the old behaviour
+     * (on-device TextToSpeech, Gemini path). Tapping the same reply while it
+     * is playing stops it (speaker toggle).
+     *
+     * ElevenLabs audio intentionally does NOT drive lip sync: it never
+     * touches the orb state, so Lia's 3D character stays still while the
+     * ElevenLabs voice plays — the same honest limitation the official app
+     * has.
+     */
+    fun speakReply(msg: ChatMessage) {
+        if (msg.text.isBlank()) return
+        if (elevenLabsPlayingId == msg.id) {
+            ElevenLabsAudioPlayer.stop()
+            elevenLabsPlayingId = null
+            return
+        }
+        val elevenVoiceId = ElevenLabsStore.selectedVoiceId(context)
+        if (elevenVoiceId.isEmpty()) {
+            tts?.speak(msg.text, TextToSpeech.QUEUE_FLUSH, null, null)
+            return
+        }
+        elevenNote = null
+        elevenLabsPlayingId = msg.id
+        scope.launch(Dispatchers.IO) {
+            val result = ElevenLabsClient.synthesize(
+                apiKey = ElevenLabsStore.getKey(context),
+                voiceId = elevenVoiceId,
+                modelId = ElevenLabsStore.selectedModel(context),
+                text = msg.text.take(MAX_ELEVENLABS_TTS_CHARS)
+            )
+            withContext(Dispatchers.Main) {
+                when (result) {
+                    is ElevenLabsResult.Success -> {
+                        scope.launch {
+                            val started = ElevenLabsAudioPlayer.play(context, result.data)
+                            if (!started) {
+                                elevenLabsPlayingId = null
+                                elevenNote = "Couldn't play the ElevenLabs voice."
+                            }
+                        }
+                    }
+                    is ElevenLabsResult.Error -> {
+                        elevenLabsPlayingId = null
+                        elevenNote = result.message
+                    }
+                }
+            }
         }
     }
 
@@ -164,6 +236,7 @@ fun ChatScreen(
         // Call Gemini
         isTyping = true
         retryNote = null
+        elevenNote = null
         scope.launch(Dispatchers.IO) {
             val apiKey = ApiKeyStore.getKey(context)
             val systemInstruction = ChatPromptBuilder.build(
@@ -211,6 +284,14 @@ fun ChatScreen(
                             val finalIdx = messages.indexOfFirst { it.id == placeholderId }
                             if (finalIdx != -1) {
                                 messages[finalIdx] = messages[finalIdx].copy(isStreaming = false)
+                                // ElevenLabs text-chat TTS (v10): when an
+                                // ElevenLabs voice is selected, speak Lia's
+                                // reply aloud with that voice. No voice
+                                // selected → nothing auto-plays, exactly as
+                                // before (user taps the speaker to listen).
+                                if (ElevenLabsStore.hasSelectedVoice(context)) {
+                                    speakReply(messages[finalIdx])
+                                }
                             }
                         }
                     }
@@ -274,7 +355,7 @@ fun ChatScreen(
                     color = colors.textPrimary
                 )
                 Text(
-                    text = retryNote ?: if (isTyping) "Typing..." else "Here to help",
+                    text = elevenNote ?: retryNote ?: if (isTyping) "Typing..." else "Here to help",
                     fontSize = 12.sp,
                     color = colors.textSecondary
                 )
@@ -292,9 +373,7 @@ fun ChatScreen(
             items(messages, key = { it.id }) { msg ->
                 NovaMessageBubble(
                     message = msg,
-                    onSpeakClick = {
-                        tts?.speak(msg.text, TextToSpeech.QUEUE_FLUSH, null, null)
-                    },
+                    onSpeakClick = { speakReply(msg) },
                     onCopyClick = {
                         val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                         clip?.setPrimaryClip(ClipData.newPlainText("Lia message", msg.text))
@@ -303,6 +382,45 @@ fun ChatScreen(
                         sendMessage(messages.lastOrNull { it.isUser }?.text ?: "")
                     }
                 )
+                // Speaker toggle on assistant replies: replay with the
+                // selected voice (ElevenLabs) or the old TTS (Gemini);
+                // tap again while playing to stop.
+                if (!msg.isUser && !msg.isError && msg.text.isNotBlank() && !msg.isStreaming) {
+                    val isPlayingThis = elevenLabsPlayingId == msg.id
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 20.dp, top = 2.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = { speakReply(msg) },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPlayingThis) Icons.Default.Stop else Icons.Default.VolumeUp,
+                                contentDescription = if (isPlayingThis) {
+                                    "Stop"
+                                } else {
+                                    "Listen to this reply"
+                                },
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Text(
+                            text = if (isPlayingThis) {
+                                "Stop"
+                            } else if (ElevenLabsStore.hasSelectedVoice(context)) {
+                                "Listen · ElevenLabs"
+                            } else {
+                                "Listen"
+                            },
+                            fontSize = 12.sp,
+                            color = colors.textSecondary
+                        )
+                    }
+                }
             }
 
             if (isTyping) {
