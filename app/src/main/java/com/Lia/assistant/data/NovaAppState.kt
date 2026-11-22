@@ -35,12 +35,14 @@ class NovaAppState(context: Context) {
     )
         private set
 
+    // V12: Girlfriend is the default personality (ayan's order). The
+    // stored value wins when the user picked something else.
     var personality by mutableStateOf(
         Personality.fromString(
             NovaPreferences.getString(
                 context,
                 NovaPreferences.Keys.PERSONALITY,
-                Personality.NORMAL.name
+                Personality.GF_MODE.name
             )
         )
     )
