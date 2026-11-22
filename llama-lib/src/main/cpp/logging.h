@@ -23,7 +23,14 @@
 #endif
 
 static inline int ai_should_log(int prio) {
+#if __ANDROID_API__ >= 30
     return __android_log_is_loggable(prio, LOG_TAG, LOG_MIN_LEVEL);
+#else
+    // __android_log_is_loggable() only exists from Android API 30, but
+    // this library targets API 26 (minSdk 26). On older APIs compare the
+    // level directly — same behaviour as the default-priority check.
+    return prio >= LOG_MIN_LEVEL;
+#endif
 }
 
 #if LOG_MIN_LEVEL <= ANDROID_LOG_VERBOSE
