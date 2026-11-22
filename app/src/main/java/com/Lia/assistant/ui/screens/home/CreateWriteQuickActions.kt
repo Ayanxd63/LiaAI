@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,35 +35,51 @@ import com.Lia.assistant.ui.theme.LocalNovaColors
  * missing: "Create Image" ("Photos into sketches") and "Write"
  * ("Notes, code, content").
  *
+ * v11 — "Create Video" joins them below: free AI video from public
+ * Hugging Face Spaces (needs the user's own free HF token, added in
+ * Settings — Hugging Face).
+ *
  * HomeScreen.kt is intentionally NOT edited by this change. Wire this
  * row in by hand (see the insertion snippet in the v10 handoff):
  * place [CreateWriteQuickActions] on HomeScreen between the Talk/Type
  * pills and the "TRY SAYING" section. It lives in the same package as
- * HomeScreen, so no import is needed there. The "create_image" and
- * "write" routes are registered in NovaApp.
+ * HomeScreen, so no import is needed there. The "create_image", "write"
+ * and "create_video" routes are registered in NovaApp.
  */
 @Composable
 fun CreateWriteQuickActions(
     navController: NavController,
     modifier: Modifier = Modifier
 ) {
-    Row(
+    Column(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            CreateWriteActionCard(
+                title = "Create Image",
+                subtitle = "Photos into sketches",
+                icon = Icons.Default.Image,
+                onClick = { navController.navigate("create_image") },
+                modifier = Modifier.weight(1f)
+            )
+            CreateWriteActionCard(
+                title = "Write",
+                subtitle = "Notes, code, content",
+                icon = Icons.Default.Edit,
+                onClick = { navController.navigate("write") },
+                modifier = Modifier.weight(1f)
+            )
+        }
         CreateWriteActionCard(
-            title = "Create Image",
-            subtitle = "Photos into sketches",
-            icon = Icons.Default.Image,
-            onClick = { navController.navigate("create_image") },
-            modifier = Modifier.weight(1f)
-        )
-        CreateWriteActionCard(
-            title = "Write",
-            subtitle = "Notes, code, content",
-            icon = Icons.Default.Edit,
-            onClick = { navController.navigate("write") },
-            modifier = Modifier.weight(1f)
+            title = "Create Video",
+            subtitle = "Free AI video — 6 second clips",
+            icon = Icons.Default.Movie,
+            onClick = { navController.navigate("create_video") },
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
