@@ -38,6 +38,28 @@ object NovaPreferences {
         const val WEATHER_CACHE_JSON = "weather_cache_json"
         const val WEATHER_CACHE_TIME = "weather_cache_time"
         const val LAST_SEEN_CRASH = "last_seen_crash"
+        // V17: on-device voice — output engine (system/Pocket TTS),
+        // Pocket TTS voice choice, and the per-engine opt-in toggles.
+        // Every V17 feature is OFF by default: each one downloads its
+        // own model on first enable, so nothing is fetched unasked.
+        const val VOICE_OUTPUT_ENGINE = "v17_voice_output_engine"
+        const val POCKET_TTS_VOICE = "v17_pocket_tts_voice"
+        const val ONDEVICE_STT_ENABLED = "v17_ondevice_stt_enabled"
+        const val VAD_GATE_ENABLED = "v17_vad_gate_enabled"
+        const val LAUGH_DETECTION_ENABLED = "v17_laugh_detection_enabled"
+        const val SPEAKER_VERIFY_ENABLED = "v17_speaker_verify_enabled"
+        const val MEMORY_EMBEDDINGS_ENABLED = "v17_memory_embeddings_enabled"
+        // V17 (online voice) — internet TTS via mesmer.tools (Kokoro,
+        // free, no key): voice choice + quality, the one-time
+        // migration to the online default, and the local 20/hour
+        // quota counter (the server enforces the real limit; the
+        // local counter just fails fast). Stored as strings —
+        // NovaPreferences has no Long/Int accessors.
+        const val ONLINE_TTS_QUALITY = "v17_online_tts_quality"
+        const val ONLINE_TTS_VOICE = "v17_online_tts_voice"
+        const val ONLINE_VOICE_MIGRATED = "v17_online_voice_migrated"
+        const val ONLINE_TTS_QUOTA_WINDOW_START = "v17_online_tts_quota_window_start"
+        const val ONLINE_TTS_QUOTA_COUNT = "v17_online_tts_quota_count"
     }
 
     private fun getPrefs(context: Context): SharedPreferences {
