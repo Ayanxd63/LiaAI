@@ -32,8 +32,8 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.OfflineBolt
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -64,6 +64,8 @@ import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.data.Personality
 import com.Lia.assistant.ui.character.CharacterView
 import com.Lia.assistant.ui.character.LiaCharacter
+import com.Lia.assistant.data.VoiceOutputEngine
+import com.Lia.assistant.data.VoiceOutputPreferences
 import com.Lia.assistant.ui.components.AccessKeyBanner
 import com.Lia.assistant.ui.components.NovaButton
 import com.Lia.assistant.ui.components.NovaGlassCard
@@ -75,7 +77,6 @@ import com.Lia.assistant.ui.theme.LocalNovaColors
 import com.Lia.assistant.ui.theme.SerifFontFamily
 import com.Lia.assistant.ui.theme.nightSky
 import com.Lia.assistant.voice.NovaOrbState
-import com.Lia.assistant.voice.OfflineModelManager
 import com.Lia.assistant.voice.SpeechLevelTracker
 import com.Lia.assistant.voice.VoiceSessionManager
 import com.Lia.assistant.voice.WeatherClient
@@ -94,7 +95,7 @@ import java.util.Locale
  * Time-of-day greeting + name and date, the headphones-girl art with a
  * pulsing orb badge (the badge colour follows the live voice state —
  * listening green, thinking amber, speaking rose), 3 quick cards
- * (Talk / Type / Image), 3 info cards (Weather / Memory / Offline),
+ * (Talk / Type / Image), 3 info cards (Weather / Memory / Voice),
  * and an ask bar that sends straight to Chat. The v10 Create Image +
  * Write actions and the "TRY SAYING" row stay where they were.
  */
@@ -132,13 +133,11 @@ fun HomeScreen(
     }
     val dateLine = SimpleDateFormat("EEEE, d MMMM", Locale.US).format(Date())
 
-    // V16: info cards — memory facts + offline model state, read on IO.
+    // V16: info cards — memory facts, read on IO.
     var factCount by remember { mutableStateOf(0) }
-    var offlineReady by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
             factCount = FactMemoryStore.loadFacts(context).size
-            offlineReady = OfflineModelManager.isModelReady(context)
         }
     }
 
@@ -405,7 +404,7 @@ fun HomeScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // V16: 3 info cards — Weather / Memory / Offline.
+        // V16: 3 info cards — Weather / Memory / Voice.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -434,14 +433,13 @@ fun HomeScreen(
                 modifier = Modifier.weight(1f)
             )
             NovaInfoCard(
-                title = "Offline",
-                body = if (offlineReady) {
-                    "Model ready — bina net ke bhi jawab"
-                } else {
-                    "Model nahi hai — Settings se download karo"
+                title = "Voice",
+                body = when (VoiceOutputPreferences.getEngine(context)) {
+                    VoiceOutputEngine.ONLINE -> "Internet voice (Kokoro)"
+                    VoiceOutputEngine.SYSTEM -> "Device voice"
                 },
-                icon = Icons.Default.OfflineBolt,
-                onClick = { navController.navigate("offline_model") },
+                icon = Icons.Default.RecordVoiceOver,
+                onClick = { navController.navigate("settings") },
                 modifier = Modifier.weight(1f)
             )
         }
