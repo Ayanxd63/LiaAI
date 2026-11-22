@@ -1,9 +1,12 @@
 package com.Lia.assistant.ui.screens.permissions
 
 import android.Manifest
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,14 +23,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,11 +47,32 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavController
+import com.Lia.assistant.action.UsageStatsHelper
+import com.Lia.assistant.notification.NotificationStore
+import com.Lia.assistant.ui.components.NovaButton
+import com.Lia.assistant.ui.components.NovaButtonType
 import com.Lia.assistant.ui.components.NovaGlassCard
 import com.Lia.assistant.ui.theme.LocalNovaColors
 import com.Lia.assistant.ui.theme.nightSky
 
+/**
+ * V14 — the setup wizard: permissions + background survival + device
+ * control, all in one place.
+ *
+ * Every row re-reads its real state when the screen resumes (the user
+ * just came back from a system settings screen), so "Granted" is never
+ * stale. Steps that Android cannot check (Infinix autostart) say so
+ * plainly instead of faking a green tick.
+ *
+ * Notification access is special: the prominent in-app disclosure
+ * (what Lia reads, why, and that nothing leaves the phone) is shown
+ * FIRST, and the system settings screen opens only after the user taps
+ * "I understand". That order is a Play Store requirement, not a nicety.
+ */
 @Composable
 fun PermissionsScreen(
     navController: NavController,
@@ -53,32 +81,73 @@ fun PermissionsScreen(
     val colors = LocalNovaColors.current
     val context = LocalContext.current
 
-    var hasMic by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        )
+    // Re-read every permission when the screen resumes — the user may
+    // have just granted something in a system settings screen.
+    var resumeCount by remember { mutableStateOf(0) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) resumeCount++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    var hasContacts by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
-        )
+    fun hasRuntimePermission(permission: String): Boolean {
+        return ContextCompat.checkSelfPermission(context, permission) ==
+            PackageManager.PERMISSION_GRANTED
     }
 
-    var hasCall by remember {
+    val hasMic by remember(resumeCount) {
+        mutableStateOf(hasRuntimePermission(Manifest.permission.RECORD_AUDIO))
+    }
+    val hasContacts by remember(resumeCount) {
+        mutableStateOf(hasRuntimePermission(Manifest.permission.READ_CONTACTS))
+    }
+    val hasCall by remember(resumeCount) {
+        mutableStateOf(hasRuntimePermission(Manifest.permission.CALL_PHONE))
+    }
+    val batteryOptimizedIgnored by remember(resumeCount) {
         mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
+            (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .isIgnoringBatteryOptimizations(context.packageName)
         )
     }
+    val hasNotificationAccess by remember(resumeCount) {
+        mutableStateOf(NotificationStore.isEnabled(context))
+    }
+    val hasDndAccess by remember(resumeCount) {
+        mutableStateOf(
+            (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .isNotificationPolicyAccessGranted
+        )
+    }
+    val canWriteSettings by remember(resumeCount) {
+        mutableStateOf(Settings.System.canWrite(context))
+    }
+    val hasUsageAccess by remember(resumeCount) {
+        mutableStateOf(UsageStatsHelper.isGranted(context))
+    }
 
-    val reqMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasMic = it }
-    val reqContacts = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasContacts = it }
-    val reqCall = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasCall = it }
+    var showNotificationDisclosure by remember { mutableStateOf(false) }
+
+    val reqMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val reqContacts = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val reqCall = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    fun openSystemSettings(action: String, withPackage: Boolean = false) {
+        val intent = Intent(action).apply {
+            if (withPackage) data = Uri.parse("package:${context.packageName}")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        context.startActivity(intent)
+    }
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .nightSky()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
         // Header
@@ -129,15 +198,114 @@ fun PermissionsScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // V14 — background survival: without these, the phone kills Lia
+        // in the background no matter how good the code is.
+        Text(
+            text = "Background (always listening)",
+            fontWeight = FontWeight.Bold,
+            fontSize = 16.sp,
+            color = colors.textPrimary
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        NovaGlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                PermissionItem(
+                    name = "Battery optimization",
+                    description = "Let Lia run in the background — pick Lia in the list " +
+                        "and choose 'Don't optimize' (Play-safe settings list).",
+                    isGranted = batteryOptimizedIgnored,
+                    onClick = {
+                        openSystemSettings(
+                            Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
+                        )
+                    }
+                )
+
+                PermissionItem(
+                    name = "Autostart & battery (Infinix / XOS)",
+                    description = "Autostart ON karo, Battery: 'No restrictions', aur " +
+                        "recents mein Lia ko lock karo — warna phone usko band " +
+                        "kar deta hai. (Ye step check nahi ho sakta — khud karna hota hai.)",
+                    isGranted = false,
+                    onClick = {
+                        openSystemSettings(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            withPackage = true
+                        )
+                    }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // V14 — device control: each row explains itself and opens the
+        // exact system screen that grants it.
+        Text(
+            text = "Device control",
+            fontWeight = FontWeight.Bold,
+            fontSize = 16.sp,
+            color = colors.textPrimary
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        NovaGlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                PermissionItem(
+                    name = "Notifications (read + reply)",
+                    description = "Lia tumhari notifications parh sake aur jab tum bolo " +
+                        "to reply kar sake. Pehle ek explanation dikhegi.",
+                    isGranted = hasNotificationAccess,
+                    onClick = {
+                        if (!hasNotificationAccess) {
+                            showNotificationDisclosure = true
+                        }
+                    }
+                )
+
+                PermissionItem(
+                    name = "Do Not Disturb access",
+                    description = "Lia Do Not Disturb on/off kar sake.",
+                    isGranted = hasDndAccess,
+                    onClick = {
+                        openSystemSettings(
+                            Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS
+                        )
+                    }
+                )
+
+                PermissionItem(
+                    name = "Modify system settings (brightness)",
+                    description = "Lia screen brightness set kar sake.",
+                    isGranted = canWriteSettings,
+                    onClick = {
+                        openSystemSettings(
+                            Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                            withPackage = true
+                        )
+                    }
+                )
+
+                PermissionItem(
+                    name = "Usage access (screen time)",
+                    description = "Lia bata sake konsi app khuli hai aur aaj kitni der chali.",
+                    isGranted = hasUsageAccess,
+                    onClick = {
+                        openSystemSettings(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                    }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
         NovaGlassCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable {
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = Uri.fromParts("package", context.packageName, null)
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                    }
-                    context.startActivity(intent)
+                    openSystemSettings(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        withPackage = true
+                    )
                 }
         ) {
             Text(
@@ -147,6 +315,55 @@ fun PermissionsScreen(
                 color = colors.accent
             )
         }
+
+        Spacer(modifier = Modifier.height(32.dp))
+    }
+
+    // V14 — prominent disclosure for notification access (Play Store
+    // requirement). Shown BEFORE the system settings screen opens, and
+    // only on the user's explicit "I understand".
+    if (showNotificationDisclosure) {
+        AlertDialog(
+            onDismissRequest = { showNotificationDisclosure = false },
+            title = {
+                Text(
+                    text = "Notifications parhna",
+                    color = colors.textPrimary
+                )
+            },
+            text = {
+                Text(
+                    text = "Lia tumhari notifications is liye parhna chahti hai:\n\n" +
+                        "• 'Mere notifications parho' — jo aaya hai, wo suna sake.\n" +
+                        "• 'WhatsApp ko reply karo' — tumhare bole hue words usi app " +
+                        "ke reply button se bhej sake.\n\n" +
+                        "Notifications sirf is phone ki memory mein rehti hain — " +
+                        "kahi save nahi hoti, kahi upload nahi hoti. Tum kabhi bhi " +
+                        "Settings se ye access band kar sakte ho.",
+                    fontSize = 14.sp,
+                    color = colors.textSecondary
+                )
+            },
+            confirmButton = {
+                NovaButton(
+                    text = "I understand — continue",
+                    onClick = {
+                        showNotificationDisclosure = false
+                        openSystemSettings(
+                            Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS
+                        )
+                    }
+                )
+            },
+            dismissButton = {
+                NovaButton(
+                    text = "Cancel",
+                    onClick = { showNotificationDisclosure = false },
+                    type = NovaButtonType.TEXT
+                )
+            },
+            containerColor = colors.surfaceRaised
+        )
     }
 }
 
