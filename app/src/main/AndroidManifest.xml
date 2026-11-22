@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- v10: draw the home character bubble over other apps (user-granted). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- READ_CONTACTS and CALL_PHONE added back when Play Store version is ready -->
     <!-- <uses-permission android:name="android.permission.READ_CONTACTS" /> -->
     <!-- <uses-permission android:name="android.permission.CALL_PHONE" /> -->
@@ -36,6 +38,25 @@
             android:name=".voice.VoiceForegroundService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <!-- v10: floating home-character bubble over other apps. -->
+        <service
+            android:name=".ui.character.FloatingCharacterService"
+            android:exported="false" />
+
+        <!-- v10: Lia Voice Keyboard — speak to type in any app. -->
+        <service
+            android:name=".input.LiaKeyboardService"
+            android:exported="true"
+            android:label="@string/lia_voice_keyboard_label"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
 
         <provider
             android:name="androidx.core.content.FileProvider"
