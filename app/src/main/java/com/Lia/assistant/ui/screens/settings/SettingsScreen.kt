@@ -22,14 +22,17 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Animation
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Mood
+import androidx.compose.material.icons.filled.OfflineBolt
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Security
@@ -41,6 +44,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,6 +64,7 @@ import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.ChatEngine
 import com.Lia.assistant.data.ElevenLabsStore
 import com.Lia.assistant.data.EnginePreferences
+import com.Lia.assistant.data.FactMemoryStore
 import com.Lia.assistant.data.LanguagePreference
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.ui.components.AccessibilitySettingsRow
@@ -73,6 +78,7 @@ import com.Lia.assistant.ui.theme.LocalNovaColors
 import com.Lia.assistant.ui.theme.SerifFontFamily
 import com.Lia.assistant.ui.theme.nightSky
 import com.Lia.assistant.voice.AlwaysListeningWatchdogWorker
+import com.Lia.assistant.voice.OfflineModelManager
 import com.Lia.assistant.voice.VoiceForegroundService
 import com.Lia.assistant.voice.WakeWordModelManager
 import kotlinx.coroutines.Dispatchers
@@ -94,6 +100,23 @@ fun SettingsScreen(
     // V12: which engine answers. Local state mirrors the stored value so
     // the row subtitle updates the moment the user taps it.
     var engine by remember { mutableStateOf(EnginePreferences.getEngine(context)) }
+
+    // V15: engine dialog + offline state. The model check (SHA-256 over
+    // ~0.5 GB) and the fact count are refreshed on IO every time this
+    // screen is entered, so returning from the download screen shows
+    // the new state.
+    var showEngineDialog by remember { mutableStateOf(false) }
+    var offlineModelReady by remember { mutableStateOf(false) }
+    var offlineFallbackOn by remember {
+        mutableStateOf(EnginePreferences.isOfflineFallbackEnabled(context))
+    }
+    var memoryFactCount by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            offlineModelReady = OfflineModelManager.isModelReady(context)
+            memoryFactCount = FactMemoryStore.loadFacts(context).size
+        }
+    }
 
     var showNameDialog by remember { mutableStateOf(false) }
     var nameInput by remember { mutableStateOf(appState.assistantName) }
@@ -247,30 +270,64 @@ fun SettingsScreen(
                     icon = Icons.Default.Key,
                     onClick = { showApiKeyDialog = true }
                 )
-                // V12: AI engine — Pollinations is free with no key and is
-                // the default. Gemini needs the key above; tapping without
-                // a key opens the key dialog instead of switching.
+                // V12/V15: AI engine — Pollinations is free with no key and
+                // is the default. Gemini needs the key above. OFFLINE is
+                // the on-device model (needs the download first). Tapping
+                // opens a 3-way picker instead of cycling, so the choice
+                // is always visible.
                 NovaSettingsRow(
                     title = "AI Engine",
-                    subtitle = if (engine == ChatEngine.GEMINI && ApiKeyStore.hasKey(context)) {
-                        "Gemini (your key) — better quality"
-                    } else {
-                        "Pollinations — free, no key"
+                    subtitle = when {
+                        engine == ChatEngine.OFFLINE && offlineModelReady ->
+                            "Offline — on this phone, no internet"
+                        engine == ChatEngine.OFFLINE ->
+                            "Offline — model not downloaded yet"
+                        engine == ChatEngine.GEMINI && ApiKeyStore.hasKey(context) ->
+                            "Gemini (your key) — better quality"
+                        else -> "Pollinations — free, no key"
                     },
                     icon = Icons.Default.Star,
-                    onClick = {
-                        if (!ApiKeyStore.hasKey(context)) {
-                            showApiKeyDialog = true
-                        } else {
-                            val next = if (engine == ChatEngine.GEMINI) {
-                                ChatEngine.POLLINATIONS
-                            } else {
-                                ChatEngine.GEMINI
-                            }
-                            EnginePreferences.setEngine(context, next)
-                            engine = next
-                        }
+                    onClick = { showEngineDialog = true }
+                )
+                // V15: offline AI — download / delete the on-device model
+                // (Wi-Fi only, ~0.5 GB, never inside the APK).
+                NovaSettingsRow(
+                    title = "Offline AI",
+                    subtitle = if (offlineModelReady) {
+                        "Model downloaded — works without internet"
+                    } else {
+                        "Not downloaded (~0.5 GB, Wi-Fi only)"
+                    },
+                    icon = Icons.Default.OfflineBolt,
+                    onClick = { navController.navigate("offline_model") }
+                )
+                // V15: when the online engine is rate-limited or offline,
+                // answer with the offline model at once (plain-language
+                // label in the chat) instead of a long silent wait.
+                NovaSettingsRow(
+                    title = "Offline fallback",
+                    subtitle = if (offlineFallbackOn) {
+                        "On — slow online replies answer offline instead"
+                    } else {
+                        "Off — online errors just show an error"
+                    },
+                    icon = Icons.Default.Speed,
+                    switch = offlineFallbackOn,
+                    onCheckedChange = { checked ->
+                        EnginePreferences.setOfflineFallbackEnabled(context, checked)
+                        offlineFallbackOn = checked
                     }
+                )
+                // V15: long-term memory — what Lia remembers about you.
+                NovaSettingsRow(
+                    title = "Memory",
+                    subtitle = if (memoryFactCount > 0) {
+                        "$memoryFactCount ${if (memoryFactCount == 1) "fact" else "facts"} remembered — tap to view or delete"
+                    } else {
+                        "Nothing remembered yet — say \"yaad rakhna ke …\""
+                    },
+                    icon = Icons.Default.Memory,
+                    onClick = { navController.navigate("memory") }
                 )
                 NovaSettingsRow(
                     title = "Assistant Name",
@@ -485,6 +542,137 @@ fun SettingsScreen(
                 AccessibilitySettingsRow()
             }
         }
+    }
+
+    // V15: AI engine picker — Pollinations / Gemini / Offline, with the
+    // state of each shown plainly. Gemini without a key opens the key
+    // dialog; Offline without a model opens the download screen.
+    if (showEngineDialog) {
+        AlertDialog(
+            onDismissRequest = { showEngineDialog = false },
+            title = { Text(text = "AI Engine", color = colors.textPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val optionModifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                    // Pollinations — always available, no key.
+                    Row(
+                        modifier = optionModifier.clickable {
+                            EnginePreferences.setEngine(context, ChatEngine.POLLINATIONS)
+                            engine = ChatEngine.POLLINATIONS
+                            showEngineDialog = false
+                        },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Pollinations — free, no key",
+                                fontSize = 15.sp,
+                                color = colors.textPrimary
+                            )
+                            Text(
+                                text = "Online, works the moment the app opens",
+                                fontSize = 12.sp,
+                                color = colors.textSecondary
+                            )
+                        }
+                        if (engine == ChatEngine.POLLINATIONS) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = colors.accent
+                            )
+                        }
+                    }
+                    // Gemini — needs the user's key.
+                    Row(
+                        modifier = optionModifier.clickable {
+                            if (!ApiKeyStore.hasKey(context)) {
+                                showEngineDialog = false
+                                showApiKeyDialog = true
+                            } else {
+                                EnginePreferences.setEngine(context, ChatEngine.GEMINI)
+                                engine = ChatEngine.GEMINI
+                                showEngineDialog = false
+                            }
+                        },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Gemini (your key)",
+                                fontSize = 15.sp,
+                                color = colors.textPrimary
+                            )
+                            Text(
+                                text = if (ApiKeyStore.hasKey(context)) {
+                                    "Better quality, your free key"
+                                } else {
+                                    "Needs a Gemini key — tap to add one"
+                                },
+                                fontSize = 12.sp,
+                                color = colors.textSecondary
+                            )
+                        }
+                        if (engine == ChatEngine.GEMINI) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = colors.accent
+                            )
+                        }
+                    }
+                    // Offline — needs the downloaded model.
+                    Row(
+                        modifier = optionModifier.clickable {
+                            if (!offlineModelReady) {
+                                showEngineDialog = false
+                                navController.navigate("offline_model")
+                            } else {
+                                EnginePreferences.setEngine(context, ChatEngine.OFFLINE)
+                                engine = ChatEngine.OFFLINE
+                                showEngineDialog = false
+                            }
+                        },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Offline — on this phone",
+                                fontSize = 15.sp,
+                                color = colors.textPrimary
+                            )
+                            Text(
+                                text = if (offlineModelReady) {
+                                    "No internet needed, quick short replies"
+                                } else {
+                                    "Model not downloaded yet — tap to download"
+                                },
+                                fontSize = 12.sp,
+                                color = colors.textSecondary
+                            )
+                        }
+                        if (engine == ChatEngine.OFFLINE) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = colors.accent
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                NovaButton(
+                    text = "Close",
+                    onClick = { showEngineDialog = false },
+                    type = NovaButtonType.TEXT
+                )
+            },
+            containerColor = colors.surfaceRaised
+        )
     }
 
     // API Key Dialog
