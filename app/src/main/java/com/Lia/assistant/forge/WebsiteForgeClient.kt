@@ -242,11 +242,15 @@ object WebsiteForgeClient {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // V13: silent channel — the Forge completion must never ding
+            // or buzz. The app is essentially silent except the
+            // assistant's own voice; a notification badge is enough.
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
                 "Website Forge",
-                NotificationManager.IMPORTANCE_HIGH
+                NotificationManager.IMPORTANCE_DEFAULT
             )
+            channel.setSound(null, null)
             manager.createNotificationChannel(channel)
         }
 
