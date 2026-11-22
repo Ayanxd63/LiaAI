@@ -44,6 +44,30 @@ jobs:
           yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses
           "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "ndk;29.0.13113456" "cmake;3.31.6"
 
+      # V17: the on-device voice engine (sherpa-onnx 2.0.3, Apache-2.0)
+      # is NOT on Maven Central. CI downloads the release tarball + JVM
+      # jar from GitHub releases (pinned, SHA-256 checked), extracts the
+      # arm64-v8a + x86_64 native libs into app/src/main/jniLibs and the
+      # jar into app/libs (see app/build.gradle.kts). Only those two
+      # ABIs are extracted — other ABIs degrade gracefully at runtime
+      # (SherpaRuntime.isAvailable() == false), same as V15's llama-lib.
+      - name: Download sherpa-onnx (on-device voice engine)
+        run: |
+          set -euo pipefail
+          SHERPA_VERSION=2.0.3
+          TARBALL_SHA256=2a30b222abae6d5cf544df4a1c27944279449c25dbb9c755097189cb45db1df0
+          JAR_SHA256=ad69b6a54462ba3671782617b11d35975c8d6b7c84ae11765e3a06dd0c56c0e5
+          mkdir -p app/libs app/src/main/jniLibs/arm64-v8a app/src/main/jniLibs/x86_64
+          curl -sSL -o /tmp/sherpa-onnx.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VERSION}/sherpa-onnx-v${SHERPA_VERSION}-android.tar.bz2"
+          echo "${TARBALL_SHA256}  /tmp/sherpa-onnx.tar.bz2" | sha256sum -c -
+          curl -sSL -o app/libs/sherpa-onnx-jvm-2.0.3.jar "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VERSION}/sherpa-onnx-jvm-2.0.3.jar"
+          echo "${JAR_SHA256}  app/libs/sherpa-onnx-jvm-2.0.3.jar" | sha256sum -c -
+          mkdir -p /tmp/sherpa-onnx
+          tar -xjf /tmp/sherpa-onnx.tar.bz2 -C /tmp/sherpa-onnx
+          cp /tmp/sherpa-onnx/jniLibs/arm64-v8a/*.so app/src/main/jniLibs/arm64-v8a/
+          cp /tmp/sherpa-onnx/jniLibs/x86_64/*.so app/src/main/jniLibs/x86_64/
+          ls -la app/src/main/jniLibs/arm64-v8a app/src/main/jniLibs/x86_64 app/libs
+
       - name: Build directDebug APK
         run: ./gradlew assembleDirectDebug --stacktrace
 
