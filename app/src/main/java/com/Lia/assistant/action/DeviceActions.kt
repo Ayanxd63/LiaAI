@@ -1,15 +1,19 @@
 package com.Lia.assistant.action
 
 import android.Manifest
+import android.app.NotificationManager
+import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import android.provider.AlarmClock
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import com.Lia.assistant.notification.NotificationStore
 import java.net.URLEncoder
 
 /**
@@ -36,6 +40,15 @@ object DeviceActions {
             is DeviceCommand.Dial -> dial(context, command.target)
             is DeviceCommand.WhatsAppMessage -> whatsAppMessage(context, command)
             is DeviceCommand.Flashlight -> setFlashlight(context, command.on)
+            is DeviceCommand.DirectCall -> directCall(context, command.target)
+            is DeviceCommand.Brightness -> setBrightness(context, command)
+            is DeviceCommand.DoNotDisturb -> setDoNotDisturb(context, command.on)
+            is DeviceCommand.InternetPanel -> openInternetPanel(context)
+            is DeviceCommand.BluetoothToggle -> toggleBluetooth(context, command.on)
+            is DeviceCommand.ReadNotifications -> readNotifications(context)
+            is DeviceCommand.ReplyNotification -> replyNotification(context, command)
+            is DeviceCommand.CurrentApp -> currentApp(context)
+            is DeviceCommand.TopApps -> topApps(context)
             DeviceCommand.VolumeUp -> adjustVolume(context, AudioManager.ADJUST_RAISE, "barha")
             DeviceCommand.VolumeDown -> adjustVolume(context, AudioManager.ADJUST_LOWER, "kam")
         }
@@ -140,6 +153,10 @@ object DeviceActions {
             SettingsScreen.LOCATION -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
             SettingsScreen.APPS -> Settings.ACTION_APPLICATION_SETTINGS
             SettingsScreen.STORAGE -> Settings.ACTION_INTERNAL_STORAGE_SETTINGS
+            SettingsScreen.BATTERY_SAVER -> Settings.ACTION_BATTERY_SAVER_SETTINGS
+            SettingsScreen.DATA_USAGE -> Settings.ACTION_DATA_USAGE_SETTINGS
+            SettingsScreen.NOTIFICATION_ACCESS ->
+                Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS
         }
         return try {
             val intent = Intent(action).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
@@ -166,6 +183,9 @@ object DeviceActions {
         SettingsScreen.LOCATION -> "Location settings"
         SettingsScreen.APPS -> "Apps settings"
         SettingsScreen.STORAGE -> "Storage settings"
+        SettingsScreen.BATTERY_SAVER -> "Battery saver settings"
+        SettingsScreen.DATA_USAGE -> "Mobile data settings"
+        SettingsScreen.NOTIFICATION_ACCESS -> "Notification access settings"
     }
 
     // ---------------------------------------------------------------- Alarm
@@ -343,5 +363,250 @@ object DeviceActions {
         } catch (_: Exception) {
             "Volume change nahi ho saka — dobara try karo."
         }
+    }
+
+    // ---------------------------------------------------------------- V14: direct call
+
+    /**
+     * Direct call (ACTION_CALL) when CALL_PHONE is granted, dialer
+     * fallback when it is not — the same rule as CommIntents.placeCall.
+     * A name needs READ_CONTACTS; a plain number works without it.
+     */
+    private fun directCall(context: Context, target: String): String {
+        return when (val lookup = ContactResolver.lookup(context, target)) {
+            is ContactLookupResult.Found -> {
+                when (CommIntents.placeCall(context, lookup.phoneNumber)) {
+                    "calling" -> "${lookup.displayName} ko direct call kar rahi hun."
+                    "dialer_opened_no_permission" ->
+                        "Call ki permission nahi hai, is liye dialer khol diya hai — " +
+                            "green button dabao. Direct call ke liye Settings > " +
+                            "Permissions se Call on kar do."
+                    else -> "Call nahi lag saki — dobara try karo."
+                }
+            }
+            is ContactLookupResult.NoPermission -> {
+                "Contacts ki permission nahi hai, is liye naam se number nahi dhoond sakti. " +
+                    "Number bol do, ya Settings > Permissions se Contacts on kar do."
+            }
+            is ContactLookupResult.NotFound -> {
+                "\"$target\" naam ka contact nahi mila — number bol do ya naam dobara batao."
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- V14: brightness
+
+    /**
+     * Screen brightness. Needs WRITE_SETTINGS (special permission, granted
+     * on a system screen). Without it, the settings screen is opened and
+     * the user is told what to tap — never a fake success.
+     */
+    private fun setBrightness(context: Context, command: DeviceCommand.Brightness): String {
+        if (!Settings.System.canWrite(context)) {
+            return try {
+                val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                AppContext.markExternalLaunch()
+                "Brightness ke liye permission chahiye — settings khol di hain, " +
+                    "wahan Lia ko allow kar do, phir dobara bolo."
+            } catch (_: Exception) {
+                "Brightness ke liye permission chahiye — Settings > Apps > Lia > " +
+                    "Permissions se 'Modify system settings' on kar do."
+            }
+        }
+        return try {
+            val resolver = context.contentResolver
+            val current = Settings.System.getInt(
+                resolver, Settings.System.SCREEN_BRIGHTNESS, 128
+            )
+            val level = when {
+                command.level != null -> command.level.coerceIn(0, 100)
+                command.delta != null -> {
+                    val currentPct = (current * 100 / 255)
+                    (currentPct + command.delta).coerceIn(0, 100)
+                }
+                else -> return "Brightness kitni karun — percent batao."
+            }
+            // Auto-brightness off first, otherwise the system overrides us.
+            Settings.System.putInt(
+                resolver, Settings.System.SCREEN_BRIGHTNESS_MODE,
+                Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+            )
+            Settings.System.putInt(
+                resolver, Settings.System.SCREEN_BRIGHTNESS,
+                (level * 255 / 100).coerceIn(10, 255)
+            )
+            "Brightness $level% kar di hai."
+        } catch (_: Exception) {
+            "Brightness change nahi ho saki — dobara try karo."
+        }
+    }
+
+    // ---------------------------------------------------------------- V14: Do Not Disturb
+
+    /**
+     * Do Not Disturb. Needs Notification Policy Access (special
+     * permission, granted on a system screen). Without it, the access
+     * screen is opened and explained.
+     */
+    private fun setDoNotDisturb(context: Context, on: Boolean): String {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (!manager.isNotificationPolicyAccessGranted) {
+            return try {
+                val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                AppContext.markExternalLaunch()
+                "Do Not Disturb ke liye access chahiye — settings khol di hain, " +
+                    "wahan Lia ko allow kar do, phir dobara bolo."
+            } catch (_: Exception) {
+                "Do Not Disturb ke liye access chahiye — Settings > Apps > Lia > " +
+                    "Permissions se 'Do Not Disturb access' on kar do."
+            }
+        }
+        return try {
+            manager.setInterruptionFilter(
+                if (on) NotificationManager.INTERRUPTION_FILTER_NONE
+                else NotificationManager.INTERRUPTION_FILTER_ALL
+            )
+            if (on) "Do Not Disturb on kar diya hai — koi notification nahi aayegi."
+            else "Do Not Disturb band kar diya hai."
+        } catch (_: Exception) {
+            "Do Not Disturb change nahi ho saka — dobara try karo."
+        }
+    }
+
+    // ---------------------------------------------------------------- V14: panels
+
+    /**
+     * Internet connectivity panel (WiFi + mobile data toggles in one
+     * place). Android gives no silent toggle for either, so the panel
+     * is the honest answer — the user taps once.
+     */
+    private fun openInternetPanel(context: Context): String {
+        return try {
+            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
+            } else {
+                Intent(Settings.ACTION_WIFI_SETTINGS)
+            }.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            context.startActivity(intent)
+            AppContext.markExternalLaunch()
+            "Internet panel khol diya hai — yahan se WiFi ya mobile data on/off " +
+                "kar lo. Android khud se on/off karne nahi deta."
+        } catch (_: Exception) {
+            "Internet panel nahi khul saka — dobara try karo."
+        }
+    }
+
+    /**
+     * Bluetooth on: the system Allow dialog (needs BLUETOOTH_CONNECT).
+     * Bluetooth off: no silent off exists, so the settings screen opens.
+     */
+    private fun toggleBluetooth(context: Context, on: Boolean): String {
+        if (!on) {
+            return openSettings(context, SettingsScreen.BLUETOOTH).let {
+                "Bluetooth settings khol di hain — wahan se off kar lo, " +
+                    "Android khamoshi se off karne nahi deta."
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            return "Bluetooth on karne ke liye Bluetooth permission chahiye — " +
+                "Settings > Permissions se Bluetooth on kar do."
+        }
+        return try {
+            val intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            AppContext.markExternalLaunch()
+            "Bluetooth on karne ke liye Allow dabao."
+        } catch (_: Exception) {
+            "Bluetooth on nahi ho saka — dobara try karo."
+        }
+    }
+
+    // ---------------------------------------------------------------- V14: notifications
+
+    private fun readNotifications(context: Context): String {
+        if (!NotificationStore.isEnabled(context)) {
+            return "Notifications parhne ke liye access chahiye — Settings > " +
+                "Permissions mein 'Notifications' wala step karo, pehle wahan " +
+                "ek chhoti si explanation dikhegi, phir system settings khulegi."
+        }
+        val recent = NotificationStore.recent(5)
+        if (recent.isEmpty()) {
+            return "Abhi koi notification nahi hai."
+        }
+        return buildString {
+            append("Ye hain tumhari aakhri notifications: ")
+            recent.forEachIndexed { index, item ->
+                if (index > 0) append(" ")
+                append("${item.appLabel} se: ")
+                if (item.title.isNotBlank()) append("${item.title} — ")
+                append(item.text.take(80))
+                append(".")
+            }
+        }.toString()
+    }
+
+    private fun replyNotification(
+        context: Context,
+        command: DeviceCommand.ReplyNotification
+    ): String {
+        if (!NotificationStore.isEnabled(context)) {
+            return "Reply karne ke liye notification access chahiye — Settings > " +
+                "Permissions mein 'Notifications' wala step karo."
+        }
+        val candidates = NotificationStore.latestWithReply(command.appHint)
+        val target = candidates.firstOrNull()
+            ?: return if (command.appHint.isNullOrBlank()) {
+                "Koi aisi notification nahi mili jiska reply ho sake."
+            } else {
+                "${command.appHint} ki koi reply wali notification nahi mili."
+            }
+        return if (NotificationStore.sendReply(context, target, command.message)) {
+            "${target.appLabel} par reply bhej diya hai."
+        } else {
+            "Reply nahi bhej saki — dobara try karo."
+        }
+    }
+
+    // ---------------------------------------------------------------- V14 (P2): usage
+
+    private fun currentApp(context: Context): String {
+        if (!UsageStatsHelper.isGranted(context)) {
+            return "Ye batane ke liye Usage access chahiye — Settings > " +
+                "Permissions mein 'Usage access' wala step karo."
+        }
+        val pkg = UsageStatsHelper.currentAppPackage(context)
+            ?: return "Abhi koi app foreground mein nahi dikh rahi."
+        return "Abhi ${UsageStatsHelper.appLabel(context, pkg)} khuli hai."
+    }
+
+    private fun topApps(context: Context): String {
+        if (!UsageStatsHelper.isGranted(context)) {
+            return "Screen time batane ke liye Usage access chahiye — Settings > " +
+                "Permissions mein 'Usage access' wala step karo."
+        }
+        val top = UsageStatsHelper.topAppsToday(context, 3)
+        if (top.isEmpty()) {
+            return "Aaj abhi tak koi app use nahi hui."
+        }
+        return buildString {
+            append("Aaj sab se zyada: ")
+            top.forEachIndexed { index, (pkg, minutes) ->
+                if (index > 0) append(", ")
+                append("${UsageStatsHelper.appLabel(context, pkg)} — $minutes min")
+            }
+            append(".")
+        }.toString()
     }
 }

@@ -3,6 +3,10 @@
 # Keep org.json
 -keep class org.json.** { *; }
 
+# V14: Vosk wake word (org.vosk) — native JNI bridge, keep everything.
+-keep class org.vosk.** { *; }
+-keep class com.alphacephei.** { *; }
+
 # Keep OkHttp
 -dontwarn okhttp3.**
 -dontwarn okio.**
