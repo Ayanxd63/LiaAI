@@ -25,9 +25,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,7 +46,12 @@ import com.Lia.assistant.ui.components.NovaGlassCard
 import com.Lia.assistant.ui.components.NovaInfoCard
 import com.Lia.assistant.ui.theme.LocalNovaColors
 import com.Lia.assistant.ui.theme.nightSky
+import com.Lia.assistant.voice.MicRecorder
+import com.Lia.assistant.voice.SpeakerVerifier
 import com.Lia.assistant.voice.VoiceEnrolmentStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * V16 (P1-5) — Voice Guardian-style enrolment for "Hey Lia".
@@ -77,6 +84,93 @@ fun VoiceEnrolmentScreen(
     var listeningFor by remember { mutableStateOf<Int?>(null) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var errorText by remember { mutableStateOf<String?>(null) }
+
+    // V17 item 3 — speaker voice-match (ERes2Net embedding). The model
+    // check hashes ~38 MB, so it runs on IO, never Main.
+    val enrolScope = rememberCoroutineScope()
+    var speakerReady by remember { mutableStateOf(false) }
+    var voiceEnrolled by remember { mutableStateOf(SpeakerVerifier.isEnrolled(context)) }
+    var voiceMatchResult by remember { mutableStateOf<String?>(null) }
+    var recordingVoice by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        speakerReady = withContext(Dispatchers.IO) {
+            SpeakerVerifier.isReady(context)
+        }
+    }
+
+    /**
+     * Record a 3-second voice sample and either enrol it (save the
+     * embedding as the profile) or compare it with the profile.
+     * Only the embedding vector is stored — the recording itself is
+     * never saved.
+     */
+    fun recordVoiceSample(forEnrol: Boolean) {
+        if (!hasMic) {
+            micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        if (recordingVoice) return
+        recordingVoice = true
+        voiceMatchResult = null
+        errorText = null
+        enrolScope.launch(Dispatchers.IO) {
+            val samples = MicRecorder.captureSeconds(context, 3)
+            if (samples == null) {
+                withContext(Dispatchers.Main) {
+                    recordingVoice = false
+                    errorText = "Mic se awaz nahi aayi — dobara try karo."
+                }
+                return@launch
+            }
+            val verifier = SpeakerVerifier.create(context)
+            if (verifier == null) {
+                withContext(Dispatchers.Main) {
+                    recordingVoice = false
+                    errorText = "Voice-match engine start nahi ho saka."
+                }
+                return@launch
+            }
+            try {
+                val embedding = verifier.embed(samples)
+                if (embedding == null) {
+                    withContext(Dispatchers.Main) {
+                        recordingVoice = false
+                        errorText = "Awaz saaf nahi aayi — 3 second saaf bolo, dobara try karo."
+                    }
+                    return@launch
+                }
+                if (forEnrol) {
+                    verifier.saveProfile(context, embedding)
+                    withContext(Dispatchers.Main) {
+                        recordingVoice = false
+                        voiceEnrolled = true
+                        voiceMatchResult = "Voice sample save ho gaya ✓ — ab \"Test voice-match\" se check karo."
+                    }
+                } else {
+                    val profile = SpeakerVerifier.loadProfile(context)
+                    val score = if (profile != null) {
+                        SpeakerVerifier.cosineSimilarity(profile, embedding)
+                    } else {
+                        -1f
+                    }
+                    withContext(Dispatchers.Main) {
+                        recordingVoice = false
+                        voiceMatchResult = when {
+                            profile == null -> "Pehle voice sample enrol karo — koi profile nahi hai."
+                            score < 0f -> "Score nahi nikal saka — dobara try karo."
+                            score >= SpeakerVerifier.MATCH_THRESHOLD ->
+                                "Match score: ${"%.2f".format(score)} — ye tumhari awaz lagti hai ✓"
+                            else ->
+                                "Match score: ${"%.2f".format(score)} — ye enrolled awaz nahi lagti."
+                        }
+                    }
+                }
+            } finally {
+                verifier.release()
+            }
+        }
+    }
 
     var hasMic by remember {
         mutableStateOf(
@@ -290,6 +384,95 @@ fun VoiceEnrolmentScreen(
         )
 
         Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "Voice-match (on-device)",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.textPrimary,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+        )
+        Text(
+            text = "Apni awaz ka 3-second sample do — Lia ek voice score " +
+                "banayegi. Ye score sirf \"Hey Lia\" ko pehchanne mein madad " +
+                "karta hai; ye biometric verification NAHI hai, aur recording " +
+                "kabhi save nahi hoti — sirf ek number vector phone par rehta hai.",
+            fontSize = 13.sp,
+            color = colors.textSecondary,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+        )
+        NovaGlassCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+        ) {
+            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                if (!speakerReady) {
+                    Text(
+                        text = "Speaker model abhi download nahi hua — Settings → " +
+                            "On-device voice se \"Speaker voice-match\" download karo (Wi-Fi, ~38 MB).",
+                        fontSize = 13.sp,
+                        color = colors.textSecondary,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                    NovaButton(
+                        text = "On-device voice kholo",
+                        onClick = { navController.navigate("on_device_voice") },
+                        type = NovaButtonType.SECONDARY,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                } else {
+                    Text(
+                        text = if (voiceEnrolled) {
+                            "Voice sample enrolled ✓"
+                        } else {
+                            "Voice sample abhi enrol nahi hua"
+                        },
+                        fontSize = 14.sp,
+                        color = colors.textPrimary,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        NovaButton(
+                            text = if (recordingVoice) "Sun rahi hun…" else "Enrol voice sample",
+                            onClick = { recordVoiceSample(true) },
+                            type = NovaButtonType.PRIMARY
+                        )
+                        if (voiceEnrolled) {
+                            NovaButton(
+                                text = "Test voice-match",
+                                onClick = { recordVoiceSample(false) },
+                                type = NovaButtonType.SECONDARY
+                            )
+                        }
+                    }
+                    if (voiceEnrolled) {
+                        NovaButton(
+                            text = "Delete voice profile",
+                            onClick = {
+                                SpeakerVerifier.clearProfile(context)
+                                voiceEnrolled = false
+                                voiceMatchResult = "Voice profile delete ho gaya."
+                            },
+                            type = NovaButtonType.TEXT,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+                voiceMatchResult?.let { result ->
+                    Text(
+                        text = result,
+                        fontSize = 14.sp,
+                        color = colors.textPrimary,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -306,8 +489,10 @@ fun VoiceEnrolmentScreen(
                     text = "Reset",
                     onClick = {
                         VoiceEnrolmentStore.reset(context)
+                        SpeakerVerifier.clearProfile(context)
                         confirmed = 0
                         enrolled = false
+                        voiceEnrolled = false
                         testResult = null
                     },
                     type = NovaButtonType.TEXT

@@ -68,4 +68,15 @@ object LiaVoiceBeats {
         }
         return lines.joinToString("\n")
     }
+
+    /**
+     * V17 (item 4) — the laugh beat, appended only when a laugh was
+     * just heard. One warm notice, then carry on — never a forced
+     * joke, never laughing back at him.
+     */
+    fun laughBeat(): String {
+        return "- He just laughed — notice it warmly once (\"hansi achhi " +
+            "lagi\"), then carry on normally. Never force a joke, and " +
+            "never laugh back at him."
+    }
 }

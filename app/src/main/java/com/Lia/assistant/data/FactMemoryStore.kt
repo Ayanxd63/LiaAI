@@ -1,6 +1,7 @@
 package com.Lia.assistant.data
 
 import android.content.Context
+import com.Lia.assistant.voice.MemoryEmbeddings
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -84,6 +85,8 @@ object FactMemoryStore {
     fun deleteFact(context: Context, id: String) {
         val remaining = loadFacts(context).filter { it.id != id }
         writeFacts(context, remaining)
+        // V17 item 5: the fact's cached embedding goes with it.
+        MemoryEmbeddings.deleteFactEmbedding(context, id)
     }
 
     /** Delete every saved fact. */
@@ -92,6 +95,8 @@ object FactMemoryStore {
             .edit()
             .remove(KEY_FACTS)
             .apply()
+        // V17 item 5: all cached embeddings go with the facts.
+        MemoryEmbeddings.clearAllEmbeddings(context)
     }
 
     /**
@@ -106,6 +111,21 @@ object FactMemoryStore {
         val lines = facts.joinToString("\n") { "- ${it.text}" }
         val block = "Things I remember about you:\n$lines"
         return if (block.length > 800) block.take(800) else block
+    }
+
+    /**
+     * V17 item 5 — the memory block for a [query]: semantic search
+     * over the facts when embeddings are enabled and the model is
+     * ready, otherwise the recency block above. Same 800-char cap.
+     * Call on an IO thread — embedding runs TFLite inference.
+     */
+    fun memoryBlockForQuery(context: Context, query: String): String {
+        if (!isEnabled(context)) return ""
+        val semantic = runCatching {
+            MemoryEmbeddings.semanticMemoryBlock(context, query)
+        }.getOrDefault("")
+        if (semantic.isNotEmpty()) return semantic
+        return memoryBlock(context)
     }
 
     private fun writeFacts(context: Context, facts: List<MemoryFact>) {

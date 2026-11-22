@@ -9,4 +9,12 @@
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="lia_secure_prefs.xml" />
+    <!--
+      V17 — the speaker voice-match profile is a biometric-adjacent
+      embedding: it must never leave the phone in a backup. The
+      cached memory-embedding vectors go with the facts they belong
+      to (they are useless without them) and stay out of backups too.
+    -->
+    <exclude domain="file" path="speaker_profile.json" />
+    <exclude domain="sharedpref" path="lia_fact_embeddings.xml" />
 </full-backup-content>

@@ -342,6 +342,16 @@ fun SettingsScreen(
                     icon = Icons.Default.OfflineBolt,
                     onClick = { navController.navigate("offline_model") }
                 )
+                // V17: on-device voice — Lia's own voice (Pocket TTS),
+                // on-device speech recognition, VAD gate, voice-match,
+                // laugh detection, semantic memory. Each engine downloads
+                // its own model on Wi-Fi only, never inside the APK.
+                NovaSettingsRow(
+                    title = "On-device voice",
+                    subtitle = "Lia ki awaz, sunna, VAD — bina key, bina internet",
+                    icon = Icons.Default.RecordVoiceOver,
+                    onClick = { navController.navigate("on_device_voice") }
+                )
                 // V15: when the online engine is rate-limited or offline,
                 // answer with the offline model at once (plain-language
                 // label in the chat) instead of a long silent wait.
