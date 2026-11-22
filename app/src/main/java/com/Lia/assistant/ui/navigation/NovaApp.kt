@@ -25,6 +25,7 @@ import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.ui.screens.about.AboutScreen
 import com.Lia.assistant.ui.screens.character.CHARACTER_SETTINGS_ROUTE
 import com.Lia.assistant.ui.screens.character.CharacterSettingsScreen
+import com.Lia.assistant.ui.screens.chat.ChatScreen
 import com.Lia.assistant.ui.screens.elevenlabs.ElevenLabsSettingsScreen
 import com.Lia.assistant.ui.screens.keyboard.VoiceKeyboardSettingsScreen
 import com.Lia.assistant.ui.screens.prompt.PromptGeneratorScreen
