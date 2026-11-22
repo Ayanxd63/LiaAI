@@ -18,6 +18,7 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import com.Lia.assistant.action.AppContext
 import com.Lia.assistant.data.NovaAppState
+import com.Lia.assistant.data.Personality
 import com.Lia.assistant.data.VoicePlaybackSettings
 import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.license.AccessKeyManager
@@ -67,7 +68,11 @@ class MainActivity : ComponentActivity() {
 
             NovaTheme(
                 mode = appState.themeMode,
-                reducedMotion = appState.reducedMotion
+                reducedMotion = appState.reducedMotion,
+                // V13: warm rose theme while the Girlfriend is active.
+                // appState.personality is Compose state, so switching
+                // personality re-themes the app live, no restart needed.
+                romantic = appState.personality == Personality.GF_MODE
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     NovaApp(appState = appState)
