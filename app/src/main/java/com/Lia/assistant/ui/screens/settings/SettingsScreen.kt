@@ -22,7 +22,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Mood
@@ -49,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.Lia.assistant.data.ApiKeyStore
+import com.Lia.assistant.data.ElevenLabsStore
 import com.Lia.assistant.data.LanguagePreference
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.ui.components.AccessibilitySettingsRow
@@ -206,6 +209,26 @@ fun SettingsScreen(
                         appState.applyVoiceName(context, nextVoice)
                     }
                 )
+                // v10: Voice & language — speech speed, voice volume, listen on open.
+                NovaSettingsRow(
+                    title = "Voice & language",
+                    subtitle = "Speech speed, voice volume, listen on open",
+                    icon = Icons.Default.Speed,
+                    onClick = { navController.navigate("voice_settings") }
+                )
+                // v10: ElevenLabs — natural voices with your own API key.
+                NovaSettingsRow(
+                    title = "ElevenLabs",
+                    subtitle = if (ElevenLabsStore.hasSelectedVoice(context)) {
+                        ElevenLabsStore.selectedVoiceName(context)
+                    } else if (ElevenLabsStore.hasKey(context)) {
+                        "Connected — no voice picked"
+                    } else {
+                        "Not connected"
+                    },
+                    icon = Icons.Default.RecordVoiceOver,
+                    onClick = { navController.navigate("elevenlabs_settings") }
+                )
             }
         }
 
@@ -223,6 +246,13 @@ fun SettingsScreen(
                     subtitle = appState.orbStyle,
                     icon = Icons.Default.ColorLens,
                     onClick = { navController.navigate("orb_style") }
+                )
+                // v10: Home character — saree or headphones girl (2D illustration, not a 3D model).
+                NovaSettingsRow(
+                    title = "Home character",
+                    subtitle = "Choose Lia's look — saree or headphones",
+                    icon = Icons.Default.Face,
+                    onClick = { navController.navigate("character_settings") }
                 )
                 NovaSettingsRow(
                     title = "Theme Mode",
@@ -261,6 +291,13 @@ fun SettingsScreen(
                     subtitle = "Microphone, Contacts, Calls",
                     icon = Icons.Default.Security,
                     onClick = { navController.navigate("permissions") }
+                )
+                // v10: Voice Keyboard — speak to type in any app (Hindi / English).
+                NovaSettingsRow(
+                    title = "Voice Keyboard",
+                    subtitle = "Speak to type in any app — Hindi / English",
+                    icon = Icons.Default.Keyboard,
+                    onClick = { navController.navigate("voice_keyboard") }
                 )
                 // Flavor-specific Accessibility Row (active in direct, stub in play)
                 AccessibilitySettingsRow()
