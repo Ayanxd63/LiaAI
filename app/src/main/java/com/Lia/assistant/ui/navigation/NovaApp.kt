@@ -11,10 +11,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.data.NovaPreferences
 import com.Lia.assistant.forge.ForgeController
@@ -93,6 +95,19 @@ fun NovaApp(appState: NovaAppState) {
                     composable("onboarding") { OnboardingScreen(navController) }
                     composable("home") { HomeScreen(navController, appState) }
                     composable("chat") { ChatScreen(navController, appState) }
+                    // V13: reopen a saved chat from History and continue it.
+                    composable(
+                        route = "chat/{sessionId}",
+                        arguments = listOf(
+                            navArgument("sessionId") { type = NavType.StringType }
+                        )
+                    ) { backStackEntry ->
+                        ChatScreen(
+                            navController = navController,
+                            appState = appState,
+                            sessionId = backStackEntry.arguments?.getString("sessionId")
+                        )
+                    }
                     composable("history") { HistoryScreen(navController, appState) }
                     composable("settings") { SettingsScreen(navController, appState) }
                     composable("voice") { VoiceScreen(navController, appState) }
