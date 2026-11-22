@@ -38,7 +38,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.Lia.assistant.data.CharacterPreferences
 import com.Lia.assistant.data.NovaAppState
+import com.Lia.assistant.ui.character.CharacterView
+import com.Lia.assistant.ui.character.LiaCharacter
 import com.Lia.assistant.ui.components.AccessKeyBanner
 import com.Lia.assistant.ui.components.NovaButton
 import com.Lia.assistant.ui.components.NovaButtonType
@@ -48,6 +51,7 @@ import com.Lia.assistant.ui.fx.NovaOrbStyle
 import com.Lia.assistant.ui.theme.LocalNovaColors
 import com.Lia.assistant.ui.theme.SerifFontFamily
 import com.Lia.assistant.ui.theme.nightSky
+import com.Lia.assistant.voice.SpeechLevelTracker
 import com.Lia.assistant.voice.VoiceSessionManager
 import java.util.Calendar
 
@@ -58,8 +62,18 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val colors = LocalNovaColors.current
+    val context = LocalContext.current
     val orbState by VoiceSessionManager.state.collectAsState()
     val amplitude by VoiceSessionManager.amplitude.collectAsState()
+
+    // Home character: which 2D illustration to show, and whether the
+    // character replaces the orb at all. Lip-sync level comes from the
+    // Gemini-voice-only SpeechLevelTracker, so the mouth moves while
+    // Lia speaks in voice mode. (Text replies read aloud with the
+    // system TTS voice do NOT feed this flow — different voice, not
+    // Gemini — so the character stays still for those.)
+    val characterSettings by CharacterPreferences.observe(context).collectAsState()
+    val speechLevel by SpeechLevelTracker.speechLevel.collectAsState()
 
     val screenWidth = LocalConfiguration.current.screenWidthDp.dp
     val orbSize = screenWidth * 0.55f
@@ -156,20 +170,39 @@ fun HomeScreen(
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        // Hero 3D Orb (~55% screen width)
-        Box(
-            modifier = Modifier
-                .size(orbSize)
-                .clickable { navController.navigate("voice") },
-            contentAlignment = Alignment.Center
-        ) {
-            LiaOrb3D(
-                state = orbState,
-                size = orbSize,
-                amplitude = amplitude,
-                style = NovaOrbStyle.fromString(appState.orbStyle),
-                assistantName = appState.assistantName
-            )
+        // Hero: the home character (2D illustration with lip-sync) when
+        // enabled, otherwise the 3D orb exactly as before. The orb code
+        // is kept as the fallback — it is not removed.
+        if (characterSettings.homeCharacterEnabled) {
+            Box(
+                modifier = Modifier
+                    .size(orbSize)
+                    .clickable { navController.navigate("voice") },
+                contentAlignment = Alignment.Center
+            ) {
+                CharacterView(
+                    character = LiaCharacter.fromId(characterSettings.characterId),
+                    speechLevel = speechLevel,
+                    size = orbSize,
+                    animate = !appState.reducedMotion,
+                    contentDescription = "Lia"
+                )
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(orbSize)
+                    .clickable { navController.navigate("voice") },
+                contentAlignment = Alignment.Center
+            ) {
+                LiaOrb3D(
+                    state = orbState,
+                    size = orbSize,
+                    amplitude = amplitude,
+                    style = NovaOrbStyle.fromString(appState.orbStyle),
+                    assistantName = appState.assistantName
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -199,6 +232,14 @@ fun HomeScreen(
                 type = NovaButtonType.SECONDARY
             )
         }
+
+        Spacer(modifier = Modifier.height(36.dp))
+
+        // v10: Create Image + Write quick actions (official LIA home actions)
+        CreateWriteQuickActions(
+            navController = navController,
+            modifier = Modifier.padding(horizontal = 20.dp)
+        )
 
         Spacer(modifier = Modifier.height(36.dp))
 
