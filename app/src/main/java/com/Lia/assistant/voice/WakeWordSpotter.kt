@@ -2,6 +2,7 @@ package com.Lia.assistant.voice
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -123,7 +124,13 @@ class WakeWordSpotter(
                     throw IllegalStateException("Could not start listening.")
                 }
                 Log.d(TAG, "Wake-word spotter running (grammar: Hey Lia)")
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                // V21 fix: UnsatisfiedLinkError is an Error, not an
+                // Exception — a missing native lib (e.g. JNA's
+                // libjnidispatch.so) used to escape this catch and kill
+                // the app. Degrade to onError + stop() instead. Never
+                // swallow coroutine cancellation.
+                if (e is CancellationException) throw e
                 Log.w(TAG, "Wake-word spotter failed to start", e)
                 stop()
                 onError(e.localizedMessage ?: "Wake-word could not start")
