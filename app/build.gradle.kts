@@ -124,7 +124,13 @@ dependencies {
     // Actions build on this branch; if it fails to resolve, bump it to
     // the current release on Maven Central.
     implementation("androidx.work:work-runtime-ktx:2.9.0")
-    implementation("com.alphacephei:vosk-android:0.3.45")
+    implementation("com.alphacephei:vosk-android:0.3.45") {
+        // V21 fix, round 2: vosk-android pulls in the plain JNA jar
+        // transitively, which duplicates every class in the JNA AAR
+        // below (126 duplicate-class errors). Exclude it here so JNA
+        // comes ONLY from the AAR.
+        exclude(group = "net.java.dev.jna", module = "jna")
+    }
     // V21 fix: Vosk's Model() needs JNA's android-aarch64
     // libjnidispatch.so; the plain JNA jar vosk-android pulls in does
     // not put it in the minified APK, so the wake-word spotter crashed
