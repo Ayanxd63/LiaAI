@@ -1,10 +1,19 @@
-# V19 — Licences & provenance (Pocket TTS is back)
+# V21 — Licences & provenance (Hindi voice fix)
 
-V19 restores ONE on-device engine from V17 — Pocket TTS only — for
-fast voice (the user: "Fast voice chaye. Replay to Aya he NHI").
-Everything in this file is what is ACTUALLY in the app now. Nothing
-is copied from Maya (no code, prompts, models, `.so` binaries, ogg
-samples, art, palette, or endpoints; no getmaya.online use).
+V21 adds the Hindi voice fix on top of V19: Supertonic 3 Hindi TTS
+(~139 MB) + Shruti Urdu/Hindi STT (~51 MB each), all on-device via
+the sherpa-onnx runtime V19 already ships. Everything in this file
+is what is ACTUALLY in the app now. Nothing is copied from Maya (no
+code, prompts, models, `.so` binaries, ogg samples, art, palette,
+or endpoints; no getmaya.online use).
+
+## Added in V21 (Hindi voice fix)
+
+| What | Licence | Source / version |
+|---|---|---|
+| Supertonic 3 int8 TTS model (Hindi `hi`, one of 31 languages) | MIT (Supertone Inc., Copyright (c) 2025) | Hugging Face `csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11` — 145,317,917 bytes total (vector_estimator 78,400,833 + text_encoder 36,416,150 + vocoder 25,991,073 + duration_predictor 3,700,147 + voice.bin 517,168 + unicode_indexer.bin 262,144 + tts.json 8,253), Wi-Fi-only download on first enable from Settings → On-device voice, SHA-256 verified, never bundled in the APK. Attribution shown in that screen. Native sherpa-onnx 2.0.3 `OfflineTtsSupertonicModelConfig` — no new dependency, no new native library. |
+| Shruti Urdu STT (Moonshine pack, `ur/sherpa-onnx/`) | Apache-2.0 (UDGAM Labs) | Hugging Face `udgamlabs/Shruti-ONNX` — 53,891,294 bytes total (cached_decode 32,801,767 + encode 19,637,087 + preprocess 912,310 + uncached_decode 421,454 + tokens 118,676), Wi-Fi-only download, SHA-256 verified, never bundled. sherpa-onnx Moonshine recognizer (`from_moonshine` config from the repo README), greedy search. |
+| Shruti Hindi STT (Moonshine pack, `hi/sherpa-onnx/`) | Apache-2.0 (UDGAM Labs) | Hugging Face `udgamlabs/Shruti-ONNX` — 53,319,232 bytes total (cached_decode 32,241,067 + encode 19,637,087 + preprocess 912,310 + uncached_decode 418,654 + tokens 110,114), Wi-Fi-only download, SHA-256 verified, never bundled. Fallback when the Urdu pack is not downloaded. |
 
 ## Restored in V19 (Pocket TTS only)
 
@@ -13,12 +22,12 @@ samples, art, palette, or endpoints; no getmaya.online use).
 | sherpa-onnx v2.0.3 (runtime only) | Apache-2.0 | GitHub releases `k2-fsa/sherpa-onnx` v2.0.3, SHA-256 checked in CI (see `.github/workflows/android.yml`). CI extracts arm64-v8a + x86_64 `.so` files; the V18 arm64-only filter ships just arm64 (~31.5 MB in the APK). |
 | Pocket TTS int8 model + Lia/Loona voice references | CC-BY-4.0 (Kyutai Pocket TTS, via sherpa-onnx export) | Hugging Face `csukuangfj2/sherpa-onnx-pocket-tts-int8-2026-01-26` — ~191 MB, Wi-Fi-only download on first enable from Settings → On-device voice, SHA-256 verified, never bundled in the APK. Attribution shown in that screen. |
 
-## Still removed (was in V17, stays out in V19)
+## Still removed (was in V17, stays out in V19/V21)
 
 | What | Why it stays out |
 |---|---|
 | llama.cpp offline LLM (Qwen2.5-0.5B, ~212 MB native libs per ABI) | Offline AI cut for the diet — chat is online-only now (Pollinations / Gemini-with-key). |
-| Moonshine STT, ERes2Net speaker voice-match, Zipformer laugh detection, Silero VAD gate (all sherpa-onnx engines except Pocket TTS) | On-device voice slimmed to Pocket TTS only. Their model descriptors were deleted from VoiceModelManager; nothing in the app can download or reference them. |
+| Moonshine STT (English), ERes2Net speaker voice-match, Zipformer laugh detection, Silero VAD gate (all sherpa-onnx engines except Pocket TTS, Supertonic TTS and Shruti STT) | On-device voice slimmed to Pocket TTS + Supertonic Hindi TTS + Shruti STT only. Their model descriptors were deleted from VoiceModelManager; nothing in the app can download or reference them. |
 | TensorFlow Lite 2.17.0 (Apache-2.0) — MiniLM-L6-v2 memory embeddings | Embeddings cut with the diet; memory search is keyword/recency only now. |
 
 ## Runtime (still in the app)
@@ -44,20 +53,36 @@ Verified live 2026-11-22: `low` + `af_bella` and `low` + `hf_alpha` (Hindi text)
   accept prohibited-use terms with an HF account); cannot be fetched
   anonymously in-app.
 - **Indus Hindi Pocket TTS** (`Indus-Labs/indus-pocket-tts`, CC-BY-4.0)
-  — no published ONNX export sherpa-onnx can load. (Still moot in V19:
-  Pocket TTS is back, but the Hindi voice is a future export job.)
+  — no published ONNX export sherpa-onnx can load. (Moot in V21:
+  Supertonic 3 IS the native Hindi voice, and it is now the default
+  when downloaded.)
+- **Laghu TTS 7M Hindi** (`Abhay2310/laghu-tts-7m-hindi`, CC-BY-4.0,
+  ~30 MB synthesis files, Devanagari-only) — evaluated as the V21
+  fallback and NOT built: Supertonic won (native sherpa-onnx support,
+  no custom ONNX-Runtime glue, and its file layout matches the
+  existing sherpa jar). Laghu stays the documented fallback if
+  Supertonic ever fails on-device.
 - **Maya's models, sounds, art, prompts, endpoints** — never copied.
 - **YAMNet** — never used; the V17 laugh detector used sherpa
-  AudioTagging instead (removed in V18, stays out in V19).
+  AudioTagging instead (removed in V18, stays out in V19/V21).
 - **MediaPipe LLM Inference** — maintenance-only since mid-2026 (V15
   decision, still stands).
 
 ## Notes
 
 - Pocket TTS has NO Hindi: it speaks English (+ fr/de/pt/it/es) and
-  reads Roman Urdu with English pronunciation. (Back in V19; the Hindi
-  gap is unchanged.)
-- Moonshine tiny-en was English-only; Urdu/Hindi speech always used
-  Android's SpeechRecognizer — and still does.
+  reads Roman Urdu with English pronunciation. (Back in V19; in V21
+  it is the English on-device fallback behind the Hindi voice.)
+- Supertonic 3's text encoder has `n_langs: 0` — no language switch.
+  Pronunciation comes straight off the characters, so Latin-script
+  Roman Urdu would come out English-sounding. The app therefore
+  transliterates Roman Urdu → Devanagari on-device
+  (`RomanUrduTransliterator.kt`, deterministic, no network) before
+  Hindi TTS. The transliteration is best-effort (see that file's
+  known approximations).
+- Moonshine tiny-en was English-only; Urdu/Hindi speech used
+  Android's SpeechRecognizer — in V21 the on-device Shruti Urdu
+  pack is first when downloaded, and the system recognizer stays
+  the fallback.
 - Speaker voice-match was a similarity score, NOT biometric
-  verification. (Removed in V18, stays out in V19.)
+  verification. (Removed in V18, stays out in V19/V21.)
