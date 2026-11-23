@@ -43,15 +43,12 @@ import androidx.navigation.NavController
 import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.ChatEngine
 import com.Lia.assistant.data.EnginePreferences
-import com.Lia.assistant.data.EnginePreset
-import com.Lia.assistant.data.EnginePresetPreferences
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.data.Personality
 import com.Lia.assistant.data.SetupWizardPreferences
 import com.Lia.assistant.ui.components.NovaButton
 import com.Lia.assistant.ui.components.NovaButtonType
 import com.Lia.assistant.ui.components.NovaChip
-import com.Lia.assistant.ui.components.NovaChipRow
 import com.Lia.assistant.ui.components.NovaGlassCard
 import com.Lia.assistant.ui.components.NovaInfoCard
 import com.Lia.assistant.ui.components.NovaTextField
@@ -62,9 +59,9 @@ import com.Lia.assistant.ui.theme.nightSky
  * V16 (P0-3) — first-run setup wizard, 3 steps.
  *
  * Step 1: permissions, each ASKED in sequence (one system dialog per
- * permission — that is how Android works). Step 2: engine choice +
- * Fast/Warm/Smart preset. Step 3: persona + names. Skip is always
- * available, and the wizard is re-runnable from Settings.
+ * permission — that is how Android works). Step 2: engine choice
+ * (Warm reply style is fixed — V20 removed the preset picker).
+ * Step 3: persona + names. Skip is always available.
  *
  * The honest line is on the screen itself: Android kisi app ko khud se
  * permissions on karne nahi deta — har ek pe user ko Allow dabana parta
@@ -359,7 +356,6 @@ private fun WizardEngineStep(
     val context = LocalContext.current
 
     var engine by remember { mutableStateOf(EnginePreferences.getEngine(context)) }
-    var preset by remember { mutableStateOf(EnginePresetPreferences.getPreset(context)) }
     val hasKey = remember { ApiKeyStore.hasKey(context) }
 
     Text(
@@ -428,28 +424,6 @@ private fun WizardEngineStep(
         }
     }
 
-    Spacer(modifier = Modifier.height(20.dp))
-    Text(
-        text = "Preset — Lia kis lehje mein jawab de?",
-        fontSize = 15.sp,
-        fontWeight = FontWeight.SemiBold,
-        color = colors.textPrimary
-    )
-    Spacer(modifier = Modifier.height(8.dp))
-    NovaChipRow(
-        chips = EnginePreset.values().map { it.displayName to (preset == it) },
-        onChipClick = { index ->
-            val picked = EnginePreset.values()[index]
-            EnginePresetPreferences.setPreset(context, picked)
-            preset = picked
-        }
-    )
-    Text(
-        text = preset.tagline,
-        fontSize = 13.sp,
-        color = colors.textSecondary,
-        modifier = Modifier.padding(top = 8.dp)
-    )
     Spacer(modifier = Modifier.height(20.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         NovaButton(text = "Back", onClick = onBack, type = NovaButtonType.SECONDARY)
