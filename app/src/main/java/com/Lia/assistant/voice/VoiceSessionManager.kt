@@ -22,6 +22,7 @@ import com.Lia.assistant.data.ChatHistoryMessage
 import com.Lia.assistant.data.ChatHistoryStore
 import com.Lia.assistant.data.ChatSession
 import com.Lia.assistant.data.DeviceTtsVoicePreferences
+import com.Lia.assistant.data.EnginePreferences
 import com.Lia.assistant.data.FactMemoryStore
 import com.Lia.assistant.data.LanguagePreference
 import com.Lia.assistant.data.MemoryCapture
@@ -87,11 +88,15 @@ object VoiceSessionManager {
      *   never fire mid-request (worst case was ~9 minutes).
      * - Online TTS synthesis: 20s (enforced inside OnlineTtsEngine).
      * - Pocket TTS speak: 30s (watchdog in speakPocketNoKey).
+     * - Hindi TTS speak: 30s (watchdog in speakHindiNoKey, V21).
      * - Live connect: 30s (connect watchdog below).
+     * V21: the Shruti on-device recognizer caps its own utterance
+     * at 12s (see ShrutiSttEngine), so it needs no watchdog.
      */
     private const val VOICE_REPLY_TIMEOUT_MS = 30_000L
     private const val STT_LISTEN_TIMEOUT_MS = 15_000L
     private const val POCKET_SPEAK_TIMEOUT_MS = 30_000L
+    private const val HINDI_SPEAK_TIMEOUT_MS = 30_000L
     private const val LIVE_CONNECT_TIMEOUT_MS = 30_000L
 
     /** V19: give up listening after this many consecutive STT failures. */
@@ -274,9 +279,14 @@ object VoiceSessionManager {
     private var appContext: Context? = null
 
     // V12 no-key voice mode: Android SpeechRecognizer for input,
-    // Pollinations chat for the brain, and the V19 voice chain
-    // (POCKET → ONLINE → SYSTEM) for output. No key, no network
-    // service for the voice itself.
+    // Pollinations chat for the brain, and the V21 voice chain
+    // (HINDI → POCKET → ONLINE → SYSTEM) for output. No key, no
+    // network service for the voice itself. V21: the recognizer is
+    // the on-device Shruti Urdu model when downloaded (it hears his
+    // Urdu as Urdu); the system recognizer stays the fallback. The
+    // chat engine is the Settings "AI Engine" choice — Pollinations
+    // (free, no key, default) or Gemini (his own free key, faster
+    // and better at Roman Urdu) — see handleNoKeyTranscript.
     private var noKeyMode = false
     private var speechRecognizer: SpeechRecognizer? = null
     private var noKeyTts: TextToSpeech? = null
@@ -293,6 +303,13 @@ object VoiceSessionManager {
     // Settings. Null when the model is not downloaded.
     private var pocketTts: PocketTtsEngine? = null
     private var pocketTtsVoiceId: String? = null
+
+    // V21: the cached Hindi voice (Supertonic 3, ~139 MB) and the
+    // cached on-device Urdu/Hindi recognizer (Shruti, ~51 MB).
+    // Same lifecycle as Pocket: created once per session, released
+    // in stop(). Null when their models are not downloaded.
+    private var hindiTts: HindiTtsEngine? = null
+    private var shrutiStt: ShrutiSttEngine? = null
 
     // V19: streaming reply state — sentences spoken as they arrive.
     // The pump speaks queued sentences one at a time through the
@@ -616,6 +633,15 @@ object VoiceSessionManager {
         mainHandler.post {
             if (!_isActive.value || !noKeyMode || _muted.value || noKeySpeaking) return@post
             val ctx = appContext ?: return@post
+            // V21: on-device Urdu STT first when its model is
+            // downloaded — Shruti hears his Urdu as Urdu, where the
+            // system recognizer (English-tuned) mis-hears it. The
+            // system recognizer below stays the fallback when no
+            // Shruti model is downloaded.
+            if (ShrutiSttEngine.isReady(ctx)) {
+                startShrutiListening(ctx)
+                return@post
+            }
             try {
                 if (!SpeechRecognizer.isRecognitionAvailable(ctx)) {
                     _state.value = NovaOrbState.ERROR
@@ -661,12 +687,62 @@ object VoiceSessionManager {
         noKeyRestartJob?.cancel()
         noKeyRestartJob = null
         disarmListeningWatchdog()
+        // V21: stop an in-flight Shruti utterance too (its listenOnce
+        // checks the flag and returns null).
+        try {
+            shrutiStt?.stopListening()
+        } catch (_: Exception) {
+        }
         if (!noKeyListening) return
         noKeyListening = false
         try {
             speechRecognizer?.cancel()
         } catch (_: Exception) {
         }
+    }
+
+    /**
+     * V21 — one listening round with the on-device Shruti recognizer
+     * (Urdu pack first, Hindi fallback). listenOnce blocks up to
+     * 12s on a background thread and returns the full utterance
+     * text (the sherpa-onnx Moonshine pack has no word-by-word
+     * streaming). A blank result is a quiet room — listen again
+     * after a short pause, exactly like the system recognizer's
+     * ERROR_NO_MATCH path. A stopped session / mute drops the
+     * result instead of starting a turn.
+     */
+    private fun startShrutiListening(ctx: Context) {
+        noKeyListening = true
+        _state.value = NovaOrbState.LISTENING
+        _statusText.value = "Boliye, main sun rahi hun…"
+        setTurnState(VoiceTurnState.LISTENING)
+        scope.launch {
+            val engine = getOrCreateShrutiStt(ctx)
+            val text = engine?.listenOnce(ctx)
+            mainHandler.post {
+                noKeyListening = false
+                if (!_isActive.value || !noKeyMode || _muted.value) return@post
+                if (text.isNullOrBlank()) {
+                    scheduleNoKeyRestart(1_500L)
+                } else {
+                    sttFailureStrikes = 0
+                    handleNoKeyTranscript(text)
+                }
+            }
+        }
+    }
+
+    /** The cached Shruti recognizer (created once per session). */
+    private fun getOrCreateShrutiStt(ctx: Context): ShrutiSttEngine? {
+        shrutiStt?.let { return it }
+        val engine = ShrutiSttEngine.create(ctx) ?: return null
+        shrutiStt = engine
+        return engine
+    }
+
+    private fun releaseShrutiStt() {
+        runCatching { shrutiStt?.release() }
+        shrutiStt = null
     }
 
     private fun scheduleNoKeyRestart(delayMs: Long) {
@@ -915,7 +991,42 @@ object VoiceSessionManager {
         }
     }
 
-    /** One recognised utterance: device command or a Pollinations reply. */
+    /**
+     * V21 — the Gemini leg of a no-key voice turn, shaped like
+     * [PollinationsClient.chatStream] so the streaming UI works the
+     * same either way. GeminiTextClient.reply is NOT a stream (it
+     * returns the whole reply at once), so on success the full text
+     * is fed to [onToken] in one go — the sentence pump still speaks
+     * it sentence by sentence, and the first sentence still speaks
+     * as soon as the reply arrives. No key stored = a plain error
+     * (the voice path never asks for a key mid-conversation; the
+     * user picks Pollinations in Settings instead).
+     */
+    private suspend fun chatStreamGemini(
+        ctx: Context,
+        systemInstruction: String,
+        history: List<ChatTurn>,
+        onToken: (String) -> Unit,
+        onRetrying: ((Int) -> Unit)? = null
+    ): ChatReplyResult {
+        val apiKey = ApiKeyStore.getKey(ctx)
+        if (apiKey.isEmpty()) {
+            return ChatReplyResult.Error(
+                message = "Gemini key nahi hai — Settings → Gemini API Key se key daalo, ya AI Engine wapas Pollinations par rakho.",
+                isNetworkError = false,
+                isRateLimited = false
+            )
+        }
+        return when (val reply = GeminiTextClient.reply(apiKey, systemInstruction, history, onRetrying)) {
+            is ChatReplyResult.Success -> {
+                onToken(reply.text)
+                reply
+            }
+            is ChatReplyResult.Error -> reply
+        }
+    }
+
+    /** One recognised utterance: device command or an AI reply (Pollinations or Gemini). */
     private fun handleNoKeyTranscript(text: String) {
         if (!_isActive.value || !noKeyMode) return
         val trimmed = text.trim()
@@ -1036,16 +1147,33 @@ object VoiceSessionManager {
                 // call.cancel()), so a hung request dies at 30s instead
                 // of the V15 worst case (~9 minutes behind a blocking
                 // OkHttp execute the timeout could never interrupt).
+                // V21: the chat engine is the Settings "AI Engine"
+                // choice — Pollinations (free, no key, default) or
+                // Gemini (his own free key: faster, understands Roman
+                // Urdu better). Gemini's reply() is not a stream, so
+                // chatStreamGemini feeds the whole reply to onToken
+                // at once — the first sentence still speaks as soon
+                // as the reply arrives.
                 resetStreamState()
                 val result: ChatReplyResult? = withTimeoutOrNull(VOICE_REPLY_TIMEOUT_MS) {
-                    PollinationsClient.chatStream(
-                        systemInstruction, history,
-                        onToken = { acc -> onStreamToken(acc) },
-                        onRetrying = { attempt ->
-                            _statusText.value = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
-                        },
-                        retryDelaysMs = VOICE_RETRY_DELAYS_MS
-                    )
+                    if (EnginePreferences.useGemini(ctx)) {
+                        chatStreamGemini(
+                            ctx, systemInstruction, history,
+                            onToken = { acc -> onStreamToken(acc) },
+                            onRetrying = { attempt ->
+                                _statusText.value = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
+                            }
+                        )
+                    } else {
+                        PollinationsClient.chatStream(
+                            systemInstruction, history,
+                            onToken = { acc -> onStreamToken(acc) },
+                            onRetrying = { attempt ->
+                                _statusText.value = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
+                            },
+                            retryDelaysMs = VOICE_RETRY_DELAYS_MS
+                        )
+                    }
                 }
                 finishChatTurn(result)
             } catch (e: Exception) {
@@ -1104,6 +1232,9 @@ object VoiceSessionManager {
             return
         }
         when (order[index]) {
+            VoiceOutputEngine.HINDI -> speakHindiNoKey(ctx, text, onDone) {
+                speakVoiceChain(ctx, order, index + 1, text, onDone)
+            }
             VoiceOutputEngine.POCKET -> speakPocketNoKey(ctx, text, onDone) {
                 speakVoiceChain(ctx, order, index + 1, text, onDone)
             }
@@ -1112,6 +1243,93 @@ object VoiceSessionManager {
             }
             VoiceOutputEngine.SYSTEM -> speakSystemNoKey(text, onDone)
         }
+    }
+
+    /**
+     * V21 — speak one reply with the on-device Hindi voice
+     * (Supertonic 3). Same shape as [speakPocketNoKey]: the engine
+     * is created once per session and cached (loading ~139 MB of
+     * ONNX models is expensive); a failed speak drops the cached
+     * engine so the next attempt rebuilds it. A 30s watchdog bounds
+     * native generation: on timeout the engine is stopped and the
+     * chain moves on. When the model is not downloaded, [onFallback]
+     * runs at once — the chain never waits on a missing engine.
+     * Roman Urdu is transliterated to Devanagari inside the engine
+     * (see HindiTtsEngine) — the Hindi voice needs Devanagari text.
+     */
+    private fun speakHindiNoKey(
+        ctx: Context,
+        text: String,
+        onDone: (() -> Unit)? = null,
+        onFallback: () -> Unit
+    ) {
+        if (!HindiTtsEngine.isReady(ctx)) {
+            onFallback()
+            return
+        }
+        noKeySpeaking = true
+        _state.value = NovaOrbState.SPEAKING
+        setTurnState(VoiceTurnState.SPEAKING)
+        _statusText.value = "Lia bol rahi hai…"
+        _amplitude.value = 0.4f
+        scope.launch {
+            val engine = getOrCreateHindiTts(ctx)
+            if (engine == null) {
+                mainHandler.post {
+                    noKeySpeaking = false
+                    _amplitude.value = 0f
+                    onFallback()
+                }
+                return@launch
+            }
+            var done = false
+            val finishOk = {
+                if (!done) {
+                    done = true
+                    noKeySpeaking = false
+                    _amplitude.value = 0f
+                    _state.value = NovaOrbState.LISTENING
+                    setTurnState(VoiceTurnState.LISTENING)
+                    onDone?.invoke()
+                }
+            }
+            val finishFail = {
+                if (!done) {
+                    done = true
+                    Log.w(TAG, "Hindi TTS failed — falling back")
+                    releaseHindiTts()
+                    noKeySpeaking = false
+                    _amplitude.value = 0f
+                    onFallback()
+                }
+            }
+            val watchdog = Runnable { finishFail() }
+            mainHandler.postDelayed(watchdog, HINDI_SPEAK_TIMEOUT_MS)
+            engine.speak(
+                text,
+                onDone = {
+                    mainHandler.removeCallbacks(watchdog)
+                    finishOk()
+                },
+                onError = {
+                    mainHandler.removeCallbacks(watchdog)
+                    finishFail()
+                }
+            )
+        }
+    }
+
+    /** The cached Hindi TTS engine (created once per session). */
+    private fun getOrCreateHindiTts(ctx: Context): HindiTtsEngine? {
+        hindiTts?.let { return it }
+        val engine = HindiTtsEngine.create(ctx) ?: return null
+        hindiTts = engine
+        return engine
+    }
+
+    private fun releaseHindiTts() {
+        runCatching { hindiTts?.release() }
+        hindiTts = null
     }
 
     /**
@@ -1601,6 +1819,11 @@ object VoiceSessionManager {
                     pocketTts?.stop()
                 } catch (_: Exception) {
                 }
+                // V21: mute stops the Hindi voice too.
+                try {
+                    hindiTts?.stop()
+                } catch (_: Exception) {
+                }
             } else if (_isActive.value) {
                 startNoKeyListening()
             }
@@ -1628,8 +1851,11 @@ object VoiceSessionManager {
         // V19 (S10): stop EVERY voice engine, not just system TTS — the
         // old code never stopped the online voice, so a Kokoro MP3 kept
         // playing after the session ended. Pocket's model is released.
+        // V21: the Hindi voice and the Shruti recognizer release too.
         OnlineTtsEngine.stop()
         releasePocketTts()
+        releaseHindiTts()
+        releaseShrutiStt()
         try {
             speechRecognizer?.destroy()
         } catch (_: Exception) {

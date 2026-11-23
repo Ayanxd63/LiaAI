@@ -47,6 +47,9 @@ object NovaPreferences {
         const val VOICE_OUTPUT_ENGINE = "v17_voice_output_engine"
         const val POCKET_TTS_VOICE = "v17_pocket_tts_voice"
         const val VOICE_V19_MIGRATED = "v19_voice_migrated"
+        // V21: Hindi voice (Supertonic 3) is the new default — the
+        // one-time migration flag for the V21 voice migration.
+        const val VOICE_V21_MIGRATED = "v21_voice_migrated"
         // V17 (online voice) — internet TTS via mesmer.tools (Kokoro,
         // free, no key): voice choice + quality, the one-time
         // migration to the online default, and the local 20/hour

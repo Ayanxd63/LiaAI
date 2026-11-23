@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Mood
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -51,6 +52,8 @@ import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.Lia.assistant.data.AlwaysListeningPreferences
 import com.Lia.assistant.data.ApiKeyStore
+import com.Lia.assistant.data.ChatEngine
+import com.Lia.assistant.data.EnginePreferences
 import com.Lia.assistant.data.FactMemoryStore
 import com.Lia.assistant.data.LanguagePreference
 import com.Lia.assistant.data.NovaAppState
@@ -64,6 +67,7 @@ import com.Lia.assistant.ui.components.NovaTextField
 import com.Lia.assistant.ui.theme.LocalNovaColors
 import com.Lia.assistant.ui.theme.nightSky
 import com.Lia.assistant.voice.AlwaysListeningWatchdogWorker
+import com.Lia.assistant.voice.HindiTtsEngine
 import com.Lia.assistant.voice.OnlineTtsEngine
 import com.Lia.assistant.voice.PocketTtsEngine
 import com.Lia.assistant.voice.VoiceForegroundService
@@ -77,6 +81,8 @@ import kotlinx.coroutines.withContext
  * not what the app actually does was removed, so its row is gone
  * too. What is left is what the app actually does: you, Lia's
  * voice, memory, listening, look, key, character, image, prompts.
+ * V21 adds exactly ONE row back: "AI Engine" (Pollinations free
+ * no-key / Gemini with your own free key) — 13 rows total.
  */
 @Composable
 fun SettingsScreen(
@@ -96,16 +102,23 @@ fun SettingsScreen(
     var memoryFactCount by remember { mutableStateOf(0) }
     // V18/V19: Lia's voice choice + online quota used this hour,
     // refreshed on entry. Pocket-ready tracks whether the ~191 MB
-    // model is downloaded (cached SHA check, on IO).
+    // model is downloaded (cached SHA check, on IO). V21: Hindi-ready
+    // tracks the ~139 MB Hindi voice model the same way, and
+    // chatEngine is the Settings "AI Engine" choice (Pollinations
+    // free no-key, or Gemini with the user's own free key).
     var voiceEngine by remember { mutableStateOf(VoiceOutputPreferences.getEngine(context)) }
     var showVoiceDialog by remember { mutableStateOf(false) }
     var onlineQuotaUsed by remember { mutableStateOf(0) }
     var pocketReady by remember { mutableStateOf(false) }
+    var hindiReady by remember { mutableStateOf(false) }
+    var chatEngine by remember { mutableStateOf(EnginePreferences.getEngine(context)) }
+    var showEngineDialog by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
             memoryFactCount = FactMemoryStore.loadFacts(context).size
             onlineQuotaUsed = OnlineTtsEngine.quotaUsed(context)
             pocketReady = PocketTtsEngine.isReady(context)
+            hindiReady = HindiTtsEngine.isReady(context)
         }
     }
 
@@ -224,12 +237,20 @@ fun SettingsScreen(
                     icon = Icons.Default.Mood,
                     onClick = { navController.navigate("personality") }
                 )
-                // 3. Lia's voice — POCKET (on-device) / ONLINE (Kokoro) /
-                // SYSTEM (device TTS). The chain is POCKET → ONLINE →
-                // SYSTEM, so a dead engine falls back at once.
+                // 3. Lia's voice — HINDI (on-device Hindi voice, V21
+                // default) / POCKET (on-device English) / ONLINE
+                // (Kokoro) / SYSTEM (device TTS). The chain is HINDI →
+                // POCKET → ONLINE → SYSTEM, so a dead engine falls
+                // back at once.
                 NovaSettingsRow(
                     title = "Lia's voice",
                     subtitle = when (voiceEngine) {
+                        VoiceOutputEngine.HINDI ->
+                            if (hindiReady) {
+                                "Hindi voice — desi lehja, bina internet, tez awaz"
+                            } else {
+                                "Hindi voice — model download nahi hua (neeche se karo)"
+                            }
                         VoiceOutputEngine.POCKET ->
                             if (pocketReady) {
                                 "On-device Lia voice — bina internet, tez awaz"
@@ -245,13 +266,16 @@ fun SettingsScreen(
                     icon = Icons.Default.RecordVoiceOver,
                     onClick = { showVoiceDialog = true }
                 )
-                // 4. On-device voice — Pocket TTS model download + picker.
+                // 4. On-device voice — Hindi + Pocket TTS model
+                // downloads + voice pickers.
                 NovaSettingsRow(
                     title = "On-device voice",
-                    subtitle = if (pocketReady) {
+                    subtitle = if (hindiReady) {
+                        "Hindi voice downloaded — ready (~139 MB)"
+                    } else if (pocketReady) {
                         "Lia voice downloaded — ready (~191 MB)"
                     } else {
-                        "Lia voice download karo — Wi-Fi, ~191 MB, ek dafa"
+                        "Hindi + Lia voice download karo — Wi-Fi, ek dafa"
                     },
                     icon = Icons.Default.RecordVoiceOver,
                     onClick = { navController.navigate("on_device_voice") }
@@ -359,21 +383,40 @@ fun SettingsScreen(
                     icon = Icons.Default.Key,
                     onClick = { showApiKeyDialog = true }
                 )
-                // 10. Home character — saree or headphones girl.
+                // 10. AI Engine (V21) — Pollinations (free, no key,
+                // default) or Gemini (your own free key: faster,
+                // understands Roman Urdu better). Needs a key only
+                // when Gemini is picked.
+                NovaSettingsRow(
+                    title = "AI Engine",
+                    subtitle = when (chatEngine) {
+                        ChatEngine.GEMINI ->
+                            if (ApiKeyStore.hasKey(context)) {
+                                "Gemini — tez, behtar samajh (apni key)"
+                            } else {
+                                "Gemini — key chahiye, neeche se daalo"
+                            }
+                        ChatEngine.POLLINATIONS ->
+                            "Pollinations — free, bina key"
+                    },
+                    icon = Icons.Default.Psychology,
+                    onClick = { showEngineDialog = true }
+                )
+                // 11. Home character — saree or headphones girl.
                 NovaSettingsRow(
                     title = "Home character",
                     subtitle = "Choose Lia's look — saree or headphones",
                     icon = Icons.Default.Face,
                     onClick = { navController.navigate("character_settings") }
                 )
-                // 11. Create Image — describe it, Lia draws it.
+                // 12. Create Image — describe it, Lia draws it.
                 NovaSettingsRow(
                     title = "Create Image",
                     subtitle = "Describe it — Lia draws it, free",
                     icon = Icons.Default.Image,
                     onClick = { navController.navigate("create_image") }
                 )
-                // 12. Prompt Generator — better prompts, free.
+                // 13. Prompt Generator — better prompts, free.
                 NovaSettingsRow(
                     title = "Prompt Generator",
                     subtitle = "Better prompts for chat & images — free",
@@ -384,8 +427,9 @@ fun SettingsScreen(
         }
     }
 
-    // Lia's voice picker — POCKET (on-device, default when
-    // downloaded) / ONLINE (Kokoro) / SYSTEM (device TTS).
+    // Lia's voice picker — HINDI (on-device Hindi voice, V21
+    // default when downloaded) / POCKET (on-device English) /
+    // ONLINE (Kokoro) / SYSTEM (device TTS).
     if (showVoiceDialog) {
         AlertDialog(
             onDismissRequest = { showVoiceDialog = false },
@@ -396,6 +440,41 @@ fun SettingsScreen(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
                         .padding(horizontal = 12.dp, vertical = 10.dp)
+                    // HINDI — on-device Hindi voice, the V21 fix for
+                    // the foreign accent. Roman Urdu is transliterated
+                    // to Devanagari inside the engine.
+                    Row(
+                        modifier = optionModifier.clickable {
+                            VoiceOutputPreferences.setEngine(context, VoiceOutputEngine.HINDI)
+                            voiceEngine = VoiceOutputEngine.HINDI
+                            showVoiceDialog = false
+                        },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Hindi voice (on-device)",
+                                fontSize = 15.sp,
+                                color = colors.textPrimary
+                            )
+                            Text(
+                                text = if (hindiReady) {
+                                    "Desi lehja, bina internet, tez awaz — downloaded, ready"
+                                } else {
+                                    "Desi lehja, bina internet — pehle On-device voice se download karo (~139 MB)"
+                                },
+                                fontSize = 12.sp,
+                                color = colors.textSecondary
+                            )
+                        }
+                        if (voiceEngine == VoiceOutputEngine.HINDI) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = colors.accent
+                            )
+                        }
+                    }
                     // POCKET — on-device Lia voice, fast, no internet.
                     Row(
                         modifier = optionModifier.clickable {
@@ -493,6 +572,95 @@ fun SettingsScreen(
                 NovaButton(
                     text = "Close",
                     onClick = { showVoiceDialog = false },
+                    type = NovaButtonType.TEXT
+                )
+            },
+            containerColor = colors.surfaceRaised
+        )
+    }
+
+    // AI Engine picker (V21) — Pollinations (free, no key, default)
+    // or Gemini (your own free key: faster, understands Roman Urdu
+    // better). Picking Gemini without a key shows a plain error in
+    // voice chat instead of failing silently.
+    if (showEngineDialog) {
+        AlertDialog(
+            onDismissRequest = { showEngineDialog = false },
+            title = { Text(text = "AI Engine", color = colors.textPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val optionModifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                    // POLLINATIONS — free, no key.
+                    Row(
+                        modifier = optionModifier.clickable {
+                            EnginePreferences.setEngine(context, ChatEngine.POLLINATIONS)
+                            chatEngine = ChatEngine.POLLINATIONS
+                            showEngineDialog = false
+                        },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Pollinations (free)",
+                                fontSize = 15.sp,
+                                color = colors.textPrimary
+                            )
+                            Text(
+                                text = "Bina key, bina login — thoda slow, 1 reply / 45 sec limit",
+                                fontSize = 12.sp,
+                                color = colors.textSecondary
+                            )
+                        }
+                        if (chatEngine == ChatEngine.POLLINATIONS) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = colors.accent
+                            )
+                        }
+                    }
+                    // GEMINI — your own free key.
+                    Row(
+                        modifier = optionModifier.clickable {
+                            EnginePreferences.setEngine(context, ChatEngine.GEMINI)
+                            chatEngine = ChatEngine.GEMINI
+                            showEngineDialog = false
+                        },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Gemini (apni free key)",
+                                fontSize = 15.sp,
+                                color = colors.textPrimary
+                            )
+                            Text(
+                                text = if (ApiKeyStore.hasKey(context)) {
+                                    "Tez, behtar samajh — key daal di hai"
+                                } else {
+                                    "Tez, behtar samajh — pehle Gemini API Key se key daalo"
+                                },
+                                fontSize = 12.sp,
+                                color = colors.textSecondary
+                            )
+                        }
+                        if (chatEngine == ChatEngine.GEMINI) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = colors.accent
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                NovaButton(
+                    text = "Close",
+                    onClick = { showEngineDialog = false },
                     type = NovaButtonType.TEXT
                 )
             },

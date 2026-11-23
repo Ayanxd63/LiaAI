@@ -35,9 +35,9 @@ import java.util.function.Consumer
  *
  * Honest limits (same as the V17 plan): the Kyutai model has NO Hindi
  * — it speaks English (+ fr/de/pt/it/es) and reads Roman Urdu with
- * English pronunciation. A native Hindi/Hinglish on-device voice
- * needs the Indus finetune exported to ONNX (a future job, not
- * V19). Generation is
+ * English pronunciation. The native Hindi voice is the V21
+ * HindiTtsEngine (Supertonic 3); Pocket stays the English on-device
+ * fallback. Generation is
  * CPU-bound: a short reply takes a few seconds on the Infinix HOT
  * 40i, and long replies cost battery — the engine unloads when the
  * voice session stops.

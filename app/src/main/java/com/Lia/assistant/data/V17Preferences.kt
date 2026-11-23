@@ -19,10 +19,21 @@ import android.content.Context
  * Wi-Fi download from Settings → On-device voice). The chain is
  * POCKET → ONLINE → SYSTEM, and POCKET is the default for fresh
  * installs (see the V19 migration below).
+ *
+ * V21: Hindi TTS is the voice fix (Supertonic 3, ~139 MB, native
+ * Hindi voice). The chain is now HINDI → POCKET → ONLINE → SYSTEM,
+ * and HINDI is the default when its model is downloaded (see the
+ * V21 migration below). POCKET stays as the English on-device
+ * fallback; ONLINE (Kokoro) and SYSTEM are unchanged.
  */
 
 /**
  * Which voice speaks Lia's no-key replies:
+ * - HINDI: on-device Hindi voice (Supertonic 3) — the V21 fix for
+ *   the foreign accent: speaks Roman Urdu transliterated to
+ *   Devanagari with a native Hindi voice. V21 default when its
+ *   ~139 MB model is downloaded; the chain skips it instantly when
+ *   not downloaded.
  * - ONLINE: internet voice (Kokoro via mesmer.tools) — human-like,
  *   no key, ~20 generations/hour, needs internet.
  * - POCKET: on-device Lia voice — offline, always available once
@@ -30,6 +41,7 @@ import android.content.Context
  * - SYSTEM: device TTS (cute voice) — last resort, always works.
  */
 enum class VoiceOutputEngine {
+    HINDI,
     ONLINE,
     POCKET,
     SYSTEM
@@ -42,12 +54,12 @@ object VoiceOutputPreferences {
         val stored = NovaPreferences.getString(
             context,
             NovaPreferences.Keys.VOICE_OUTPUT_ENGINE,
-            VoiceOutputEngine.POCKET.name
+            VoiceOutputEngine.HINDI.name
         )
         return try {
             VoiceOutputEngine.valueOf(stored)
         } catch (_: Exception) {
-            VoiceOutputEngine.POCKET
+            VoiceOutputEngine.HINDI
         }
     }
 
@@ -60,39 +72,55 @@ object VoiceOutputPreferences {
     }
 
     /**
-     * One-time migration (V19, replaces the V18 online-default
-     * migration): Pocket TTS is back, so the default is POCKET again.
-     * - A stored "POCKET" (V17 install that never ran V18) is kept —
-     *   the user's old choice is honoured now the engine is back.
-     * - A stored ONLINE / SYSTEM (explicit V18 choice) is kept —
-     *   V19 never overrides a choice the user actually made.
+     * One-time migration (V21, replaces the V19 migration — the V19
+     * flag is still marked done so it can never re-run and clobber
+     * a HINDI value back to POCKET):
+     * - A stored "POCKET" (the V19/V20 default — the English voice
+     *   ayan complained sounds foreign) becomes HINDI: that is
+     *   exactly the voice V21 fixes, and the chain still falls
+     *   back to POCKET when the Hindi model is not downloaded yet.
+     * - A stored ONLINE / SYSTEM (an explicit choice the user
+     *   actually made) is kept — V21 never overrides a choice.
      * - Anything else / nothing stored (fresh install, or a value
-     *   from before any voice choice existed) becomes POCKET — the
-     *   V19 default. When the model is not downloaded yet the chain
-     *   skips Pocket instantly and ONLINE speaks, so a fresh install
-     *   still talks on first launch.
-     * After this runs, the stored value IS the explicit choice. The
-     * old V18 migration flag is also marked done so it can never
-     * re-run and clobber a POCKET value back to ONLINE.
+     *   from before any voice choice existed) becomes HINDI — the
+     *   V21 default. When the model is not downloaded yet the chain
+     *   skips Hindi instantly and POCKET/ONLINE speaks, so a fresh
+     *   install still talks on first launch.
+     * After this runs, the stored value IS the explicit choice.
      */
     private fun migrateVoiceDefault(context: Context) {
         if (NovaPreferences.getBoolean(
-                context, NovaPreferences.Keys.VOICE_V19_MIGRATED, false
+                context, NovaPreferences.Keys.VOICE_V21_MIGRATED, false
             )
         ) return
         val stored = NovaPreferences.getString(
             context, NovaPreferences.Keys.VOICE_OUTPUT_ENGINE, ""
         )
-        if (stored != VoiceOutputEngine.POCKET.name &&
-            stored != VoiceOutputEngine.ONLINE.name &&
-            stored != VoiceOutputEngine.SYSTEM.name
-        ) {
-            NovaPreferences.putString(
-                context,
-                NovaPreferences.Keys.VOICE_OUTPUT_ENGINE,
-                VoiceOutputEngine.POCKET.name
-            )
+        when (stored) {
+            VoiceOutputEngine.POCKET.name,
+            VoiceOutputEngine.ONLINE.name,
+            VoiceOutputEngine.SYSTEM.name -> {
+                // POCKET (the old default) becomes the Hindi voice;
+                // an explicit ONLINE / SYSTEM choice is kept as-is.
+                if (stored == VoiceOutputEngine.POCKET.name) {
+                    NovaPreferences.putString(
+                        context,
+                        NovaPreferences.Keys.VOICE_OUTPUT_ENGINE,
+                        VoiceOutputEngine.HINDI.name
+                    )
+                }
+            }
+            else -> {
+                NovaPreferences.putString(
+                    context,
+                    NovaPreferences.Keys.VOICE_OUTPUT_ENGINE,
+                    VoiceOutputEngine.HINDI.name
+                )
+            }
         }
+        NovaPreferences.putBoolean(
+            context, NovaPreferences.Keys.VOICE_V21_MIGRATED, true
+        )
         NovaPreferences.putBoolean(
             context, NovaPreferences.Keys.VOICE_V19_MIGRATED, true
         )
@@ -102,25 +130,35 @@ object VoiceOutputPreferences {
     }
 
     /**
-     * Voice engines to try, in order, for one reply. V19 chain:
-     * POCKET (once its model is downloaded) → ONLINE (Kokoro) →
-     * SYSTEM (always last, and alone when explicitly chosen — it
-     * never fails). The caller's POCKET step skips instantly when
-     * the model is not downloaded, so the chain never waits on a
-     * missing engine. The caller tries each in turn and moves on
-     * only on failure, so a reply is never lost to one dead engine.
+     * Voice engines to try, in order, for one reply. V21 chain:
+     * HINDI (once its model is downloaded) → POCKET (English
+     * on-device) → ONLINE (Kokoro) → SYSTEM (always last, and
+     * alone when explicitly chosen — it never fails). The caller's
+     * HINDI/POCKET steps skip instantly when their model is not
+     * downloaded, so the chain never waits on a missing engine.
+     * The caller tries each in turn and moves on only on failure,
+     * so a reply is never lost to one dead engine.
      */
     fun resolveOrder(context: Context): List<VoiceOutputEngine> {
         return when (getEngine(context)) {
+            VoiceOutputEngine.HINDI ->
+                listOf(
+                    VoiceOutputEngine.HINDI,
+                    VoiceOutputEngine.POCKET,
+                    VoiceOutputEngine.ONLINE,
+                    VoiceOutputEngine.SYSTEM
+                )
             VoiceOutputEngine.POCKET ->
                 listOf(
                     VoiceOutputEngine.POCKET,
+                    VoiceOutputEngine.HINDI,
                     VoiceOutputEngine.ONLINE,
                     VoiceOutputEngine.SYSTEM
                 )
             VoiceOutputEngine.ONLINE ->
                 listOf(
                     VoiceOutputEngine.ONLINE,
+                    VoiceOutputEngine.HINDI,
                     VoiceOutputEngine.POCKET,
                     VoiceOutputEngine.SYSTEM
                 )
