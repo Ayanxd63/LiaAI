@@ -21,7 +21,6 @@ import com.Lia.assistant.data.AlwaysListeningPreferences
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.data.Personality
 import com.Lia.assistant.data.VoicePlaybackSettings
-import com.Lia.assistant.forge.ForgeController
 import com.Lia.assistant.license.AccessKeyManager
 import com.Lia.assistant.ui.character.AppVisibility
 import com.Lia.assistant.ui.character.FloatingCharacterService
@@ -97,9 +96,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        if (intent?.getBooleanExtra("EXTRA_OPEN_FORGE", false) == true) {
-            ForgeController.requestOpen()
-        }
         if (intent?.getBooleanExtra(FloatingCharacterService.EXTRA_START_VOICE, false) == true) {
             // Floating bubble tapped: start voice talk. Same guards as
             // VoiceScreen — mic permission, no active session. V12: no

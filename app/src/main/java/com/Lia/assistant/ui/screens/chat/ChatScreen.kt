@@ -27,7 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,22 +52,18 @@ import com.Lia.assistant.action.AppContext
 import com.Lia.assistant.action.DeviceActions
 import com.Lia.assistant.action.DeviceCommandParser
 import com.Lia.assistant.data.ApiKeyStore
-import com.Lia.assistant.data.ChatDisplayPreferences
 import com.Lia.assistant.data.ChatEngine
 import com.Lia.assistant.data.ChatHistoryMessage
 import com.Lia.assistant.data.ChatHistoryStore
 import com.Lia.assistant.data.ChatPrefill
 import com.Lia.assistant.data.ChatSession
 import com.Lia.assistant.data.DeviceTtsVoicePreferences
-import com.Lia.assistant.data.ElevenLabsStore
-import com.Lia.assistant.data.EnginePresetPreferences
+import com.Lia.assistant.data.EnginePreferences
 import com.Lia.assistant.data.FactMemoryStore
 import com.Lia.assistant.data.MemoryCapture
 import com.Lia.assistant.data.MemoryFact
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.data.Personality
-import com.Lia.assistant.forge.ForgeController
-import com.Lia.assistant.forge.ForgeIntent
 import com.Lia.assistant.ui.components.ChatMessage
 import com.Lia.assistant.ui.components.NovaMessageBubble
 import com.Lia.assistant.ui.components.NovaTextField
@@ -81,9 +76,6 @@ import com.Lia.assistant.voice.ChatPromptBuilder
 import com.Lia.assistant.voice.ChatReplyResult
 import com.Lia.assistant.voice.ChatTurn
 import com.Lia.assistant.voice.CuteVoice
-import com.Lia.assistant.voice.ElevenLabsAudioPlayer
-import com.Lia.assistant.voice.ElevenLabsClient
-import com.Lia.assistant.voice.ElevenLabsResult
 import com.Lia.assistant.voice.GeminiTextClient
 import com.Lia.assistant.voice.LiaVoiceBeats
 import com.Lia.assistant.voice.NovaOrbState
@@ -92,9 +84,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-/** Cap on characters sent to ElevenLabs per reply (free-tier friendly). */
-private const val MAX_ELEVENLABS_TTS_CHARS = 1000
 
 /**
  * V13 — show engine failures the way a girlfriend would: warm Roman
@@ -213,13 +202,6 @@ fun ChatScreen(
     var isTyping by remember { mutableStateOf(false) }
     // Shown under the header while a reply is being retried after overload.
     var retryNote by remember { mutableStateOf<String?>(null) }
-    // ElevenLabs (v10): id of the chat reply currently playing via ElevenLabs,
-    // or null when none is playing. Also drives the speaker toggle icon.
-    var elevenLabsPlayingId by remember { mutableStateOf<String?>(null) }
-    // Short user-readable note when ElevenLabs speaking fails (e.g. bad key,
-    // quota used up). Shown in the header subtitle; never a stack trace.
-    var elevenNote by remember { mutableStateOf<String?>(null) }
-
     // V15: a fact the auto-rules proposed, waiting for "Yaad rakhun?
     // Yes / No". Saved only on yes, dropped on no — never silent.
     var pendingMemoryFact by remember { mutableStateOf<MemoryFact?>(null) }
@@ -229,7 +211,6 @@ fun ChatScreen(
         currentSessionId = null
         pendingMemoryFact = null
         retryNote = null
-        elevenNote = null
         messages.clear()
         messages.add(ChatMessage(text = welcomeText, isUser = false))
     }
@@ -256,71 +237,24 @@ fun ChatScreen(
             }
         }
         tts = ttsInstance
-        ElevenLabsAudioPlayer.onPlaybackFinished = { elevenLabsPlayingId = null }
         onDispose {
-            ElevenLabsAudioPlayer.onPlaybackFinished = null
-            ElevenLabsAudioPlayer.stop()
             ttsInstance?.stop()
             ttsInstance?.shutdown()
         }
     }
 
     /**
-     * Speak one assistant reply out loud.
-     *
-     * ElevenLabs voice selected → synthesize the reply with ElevenLabs and
-     * play the MP3. No ElevenLabs voice selected → exactly the old behaviour
-     * (on-device TextToSpeech, Gemini path). Tapping the same reply while it
-     * is playing stops it (speaker toggle).
-     *
-     * ElevenLabs audio intentionally does NOT drive lip sync: it never
-     * touches the orb state, so Lia's 3D character stays still while the
-     * ElevenLabs voice plays — the same honest limitation the official app
-     * has.
+     * Speak one assistant reply out loud with the device voice
+     * (V12 cute voice: system TTS, no key, works offline).
+     * Tapping again restarts the reply from the start.
      */
     fun speakReply(msg: ChatMessage) {
         if (msg.text.isBlank()) return
-        if (elevenLabsPlayingId == msg.id) {
-            ElevenLabsAudioPlayer.stop()
-            elevenLabsPlayingId = null
-            return
-        }
-        val elevenVoiceId = ElevenLabsStore.selectedVoiceId(context)
-        if (elevenVoiceId.isEmpty()) {
-            // V12 cute voice (system TTS, no key): re-apply pitch/rate in
-            // case the engine reset them.
-            tts?.setPitch(CuteVoice.PITCH)
-            tts?.setSpeechRate(CuteVoice.RATE)
-            tts?.speak(msg.text, TextToSpeech.QUEUE_FLUSH, null, null)
-            return
-        }
-        elevenNote = null
-        elevenLabsPlayingId = msg.id
-        scope.launch(Dispatchers.IO) {
-            val result = ElevenLabsClient.synthesize(
-                apiKey = ElevenLabsStore.getKey(context),
-                voiceId = elevenVoiceId,
-                modelId = ElevenLabsStore.selectedModel(context),
-                text = msg.text.take(MAX_ELEVENLABS_TTS_CHARS)
-            )
-            withContext(Dispatchers.Main) {
-                when (result) {
-                    is ElevenLabsResult.Success -> {
-                        scope.launch {
-                            val started = ElevenLabsAudioPlayer.play(context, result.data)
-                            if (!started) {
-                                elevenLabsPlayingId = null
-                                elevenNote = "Couldn't play the ElevenLabs voice."
-                            }
-                        }
-                    }
-                    is ElevenLabsResult.Error -> {
-                        elevenLabsPlayingId = null
-                        elevenNote = result.message
-                    }
-                }
-            }
-        }
+        // V12 cute voice (system TTS, no key): re-apply pitch/rate in
+        // case the engine reset them.
+        tts?.setPitch(CuteVoice.PITCH)
+        tts?.setSpeechRate(CuteVoice.RATE)
+        tts?.speak(msg.text, TextToSpeech.QUEUE_FLUSH, null, null)
     }
 
     // Auto-scroll on new message; during streaming the bubble grows
@@ -405,21 +339,6 @@ fun ChatScreen(
             }
         }
 
-        // Check Website Forge intent
-        val forgePrompt = ForgeIntent.extract(trimmed)
-        if (forgePrompt != null) {
-            messages.add(
-                ChatMessage(
-                    text = "Opening the Website Forge for: \"$forgePrompt\"...",
-                    isUser = false
-                )
-            )
-            persistSession()
-            ForgeController.start(context, forgePrompt)
-            navController.navigate("forge")
-            return
-        }
-
         // Device command? Execute it LOCALLY on the phone instead of
         // sending it to Gemini — works even on a very slow network.
         // AppContext.current() is the app Lia opened last, so bare
@@ -449,29 +368,44 @@ fun ChatScreen(
         // is online now. V15 (fast replies): the reply STREAMS in live —
         // Pollinations tokens fill the bubble as they arrive, instead of
         // waiting for the whole answer. A rate-limited or unreachable
-        // online engine moves to the next engine in the preset order.
+        // online engine moves to the next engine in the Warm order.
         isTyping = true
         retryNote = null
-        elevenNote = null
         scope.launch(Dispatchers.IO) {
             val apiKey = ApiKeyStore.getKey(context)
-            val preset = EnginePresetPreferences.getPreset(context)
-            // V16: Lia's own voice beats + the preset's style instruction.
+            // V20: Warm is the only reply style now (presets removed) —
+            // warm and affectionate, like a caring girlfriend.
+            val presetInstruction = "Reply style: warm and affectionate, like a caring " +
+                "girlfriend talking to someone she loves. A little playful, " +
+                "never cold or formal."
             val systemInstruction = ChatPromptBuilder.build(
                 personality = appState.personality,
                 language = appState.language,
                 assistantName = appState.assistantName,
                 memoryBlock = FactMemoryStore.memoryBlock(context),
                 beats = LiaVoiceBeats.section(appState.personality, appState.userName),
-                presetInstruction = EnginePresetPreferences.instruction(preset)
+                presetInstruction = presetInstruction
             )
 
             val history = messages.map { ChatTurn(isUser = it.isUser, text = it.text) }
-            // V16 (P1-12): human-paced typing — the reply is fetched whole
-            // and typed out word by word at a human pace, instead of
-            // streaming in live.
-            val humanPaced = ChatDisplayPreferences.isHumanPacedTyping(context)
-            val engines = EnginePresetPreferences.resolveEngines(context)
+            // V20: Warm engine order (presets removed) — the user's
+            // chosen engine first, then Pollinations, then Gemini when
+            // a key is saved. A rate-limit / network error moves to
+            // the next engine; a hard error stops the chain.
+            val engines = run {
+                val chosen = EnginePreferences.getEngine(context)
+                val geminiReady = ApiKeyStore.hasKey(context)
+                val ordered = mutableListOf<ChatEngine>()
+                fun add(engine: ChatEngine) {
+                    if (engine !in ordered &&
+                        (engine == ChatEngine.POLLINATIONS || geminiReady)
+                    ) ordered += engine
+                }
+                add(chosen)
+                add(ChatEngine.POLLINATIONS)
+                add(ChatEngine.GEMINI)
+                ordered
+            }
 
             // The streaming placeholder: created on Main first, then
             // filled token by token as the reply arrives.
@@ -497,9 +431,8 @@ fun ChatScreen(
                 }
             }
 
-            // V16 (P0-6): try the engines in preset order. A rate-limit /
-            // network error moves to the next engine; a hard error stops
-            // the chain.
+            // Try the engines in order. A rate-limit / network error
+            // moves to the next engine; a hard error stops the chain.
             var result: ChatReplyResult = ChatReplyResult.Error(
                 "Koi engine available nahi — net check karo."
             )
@@ -512,20 +445,12 @@ fun ChatScreen(
                         history,
                         onRetrying = onRetrying
                     )
-                    ChatEngine.POLLINATIONS -> if (humanPaced) {
-                        PollinationsClient.chat(
-                            systemInstruction,
-                            history,
-                            onRetrying = onRetrying
-                        )
-                    } else {
-                        PollinationsClient.chatStream(
-                            systemInstruction,
-                            history,
-                            onToken = { updatePlaceholder(it) },
-                            onRetrying = onRetrying
-                        )
-                    }
+                    ChatEngine.POLLINATIONS -> PollinationsClient.chatStream(
+                        systemInstruction,
+                        history,
+                        onToken = { updatePlaceholder(it) },
+                        onRetrying = onRetrying
+                    )
                 }
                 when (attempt) {
                     is ChatReplyResult.Success -> {
@@ -554,9 +479,8 @@ fun ChatScreen(
                         if (finalIdx != -1) {
                             if (messages[finalIdx].text.isBlank()) {
                                 // Non-streaming engine (Gemini): the
-                                // placeholder is still empty — keep the
-                                // old word-by-word reveal. V16 (P1-12):
-                                // human-paced typing reveals at 90ms/word.
+                                // placeholder is still empty — reveal
+                                // it word by word.
                                 val fullReply = result.text
                                 val words = fullReply.split(" ")
                                 scope.launch {
@@ -568,21 +492,13 @@ fun ChatScreen(
                                         if (idx != -1) {
                                             messages[idx] = messages[idx].copy(text = builder.toString())
                                         }
-                                        delay(if (humanPaced) 90 else 20)
+                                        delay(20)
                                     }
                                     val doneIdx = messages.indexOfFirst { it.id == placeholderId }
                                     if (doneIdx != -1) {
                                         messages[doneIdx] = messages[doneIdx].copy(isStreaming = false)
                                         // V13: the reply is complete — save the chat.
                                         persistSession()
-                                        // ElevenLabs text-chat TTS (v10): when an
-                                        // ElevenLabs voice is selected, speak Lia's
-                                        // reply aloud with that voice. No voice
-                                        // selected → nothing auto-plays, exactly as
-                                        // before (user taps the speaker to listen).
-                                        if (ElevenLabsStore.hasSelectedVoice(context)) {
-                                            speakReply(messages[doneIdx])
-                                        }
                                     }
                                 }
                             } else {
@@ -590,9 +506,6 @@ fun ChatScreen(
                                 // text is already there — just finish.
                                 messages[finalIdx] = messages[finalIdx].copy(isStreaming = false)
                                 persistSession()
-                                if (ElevenLabsStore.hasSelectedVoice(context)) {
-                                    speakReply(messages[finalIdx])
-                                }
                             }
                         }
                     }
@@ -671,9 +584,26 @@ fun ChatScreen(
                     color = colors.textPrimary
                 )
                 Text(
-                    text = elevenNote ?: retryNote ?: if (isTyping) "Typing..." else "Here to help",
+                    text = retryNote ?: if (isTyping) "Typing..." else "Here to help",
                     fontSize = 12.sp,
                     color = colors.textSecondary
+                )
+            }
+
+            // V20: History moved here from the bottom nav — the Chat
+            // tab's own button opens the saved-chats list.
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(colors.surfaceGlass)
+                    .clickable { navController.navigate("history") }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "History",
+                    fontSize = 12.sp,
+                    color = colors.textPrimary
                 )
             }
 
@@ -717,11 +647,8 @@ fun ChatScreen(
                         sendMessage(messages.lastOrNull { it.isUser }?.text ?: "")
                     }
                 )
-                // Speaker toggle on assistant replies: replay with the
-                // selected voice (ElevenLabs) or the old TTS (Gemini);
-                // tap again while playing to stop.
+                // Listen to an assistant reply out loud (device voice).
                 if (!msg.isUser && !msg.isError && msg.text.isNotBlank() && !msg.isStreaming) {
-                    val isPlayingThis = elevenLabsPlayingId == msg.id
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -733,24 +660,14 @@ fun ChatScreen(
                             modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
-                                imageVector = if (isPlayingThis) Icons.Default.Stop else Icons.Default.VolumeUp,
-                                contentDescription = if (isPlayingThis) {
-                                    "Stop"
-                                } else {
-                                    "Listen to this reply"
-                                },
+                                imageVector = Icons.Default.VolumeUp,
+                                contentDescription = "Listen to this reply",
                                 tint = colors.textSecondary,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
                         Text(
-                            text = if (isPlayingThis) {
-                                "Stop"
-                            } else if (ElevenLabsStore.hasSelectedVoice(context)) {
-                                "Listen · ElevenLabs"
-                            } else {
-                                "Listen"
-                            },
+                            text = "Listen",
                             fontSize = 12.sp,
                             color = colors.textSecondary
                         )

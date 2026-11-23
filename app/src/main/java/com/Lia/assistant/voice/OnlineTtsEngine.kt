@@ -83,7 +83,7 @@ import java.util.concurrent.TimeUnit
  *
  * No new permissions (INTERNET + ACCESS_NETWORK_STATE were already
  * declared) and no new dependencies (OkHttp + MediaPlayer were
- * already in the app — the player follows ElevenLabsAudioPlayer's
+ * already in the app — the player follows the same MediaPlayer
  * temp-file pattern).
  */
 object OnlineTtsEngine {
@@ -427,7 +427,7 @@ object OnlineTtsEngine {
         }
     }
 
-    /** Play MP3 files one after another (MediaPlayer, ElevenLabs pattern). */
+    /** Play MP3 files one after another (MediaPlayer). */
     private fun playFiles(
         files: List<File>,
         onDone: (() -> Unit)?,

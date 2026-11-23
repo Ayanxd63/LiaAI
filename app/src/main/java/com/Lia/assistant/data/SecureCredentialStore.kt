@@ -7,10 +7,10 @@ import androidx.security.crypto.MasterKey
 
 /**
  * V15 (security P0) — Keystore-backed encrypted storage for the user's
- * own API credentials (Gemini key, ElevenLabs key).
+ * own API credentials (Gemini key).
  *
  * Before V15 the keys sat as plain text in ordinary SharedPreferences
- * ("nova_prefs" / "elevenlabs_prefs") — readable on a rooted phone or
+ * ("nova_prefs") — readable on a rooted phone or
  * via a backup restore. Now they live in EncryptedSharedPreferences
  * (AES-256-GCM, key in the Android Keystore, TEE-backed on this phone).
  *
@@ -30,7 +30,6 @@ object SecureCredentialStore {
     private const val ENC_PREF_NAME = "lia_secure_prefs"
 
     private const val KEY_GEMINI = "gemini_api_key"
-    private const val KEY_ELEVENLABS = "elevenlabs_api_key"
 
     @Volatile
     private var encryptedPrefs: SharedPreferences? = null
@@ -62,9 +61,6 @@ object SecureCredentialStore {
 
     private fun legacyPrefs(context: Context): SharedPreferences =
         context.getSharedPreferences("nova_prefs", Context.MODE_PRIVATE)
-
-    private fun legacyElevenLabsPrefs(context: Context): SharedPreferences =
-        context.getSharedPreferences("elevenlabs_prefs", Context.MODE_PRIVATE)
 
     /**
      * Read a key: encrypted store first; if empty, migrate once from
@@ -102,7 +98,7 @@ object SecureCredentialStore {
             return
         }
         // Encrypted store unavailable: plain fallback (V14 behaviour).
-        val legacy = if (key == KEY_ELEVENLABS) legacyElevenLabsPrefs(context) else legacyPrefs(context)
+        val legacy = legacyPrefs(context)
         if (trimmed.isEmpty()) {
             legacy.edit().remove(key).apply()
         } else {
@@ -119,14 +115,4 @@ object SecureCredentialStore {
 
     fun hasGeminiKey(context: Context): Boolean = getGeminiKey(context).isNotEmpty()
 
-    // ---- ElevenLabs key --------------------------------------------------
-
-    fun getElevenLabsKey(context: Context): String =
-        getMigrated(context, KEY_ELEVENLABS, legacyElevenLabsPrefs(context))
-
-    fun saveElevenLabsKey(context: Context, key: String) = putKey(context, KEY_ELEVENLABS, key)
-
-    fun hasElevenLabsKey(context: Context): Boolean = getElevenLabsKey(context).isNotEmpty()
-
-    fun clearElevenLabsKey(context: Context) = putKey(context, KEY_ELEVENLABS, "")
 }

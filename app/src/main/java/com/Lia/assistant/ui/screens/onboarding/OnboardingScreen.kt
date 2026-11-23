@@ -72,12 +72,6 @@ fun OnboardingScreen(
             orbStyle = NovaOrbStyle.ENERGY,
             orbState = NovaOrbState.SPEAKING
         ),
-        OnboardingPageData(
-            title = "Website Forge 3D",
-            description = "Say 'Lia, ek cafe ki website banao' and watch a complete animated 3D website come alive in the Forge Reactor.",
-            orbStyle = NovaOrbStyle.ARCHER,
-            orbState = NovaOrbState.CONNECTING
-        )
     )
 
     val pagerState = rememberPagerState(pageCount = { pages.size })

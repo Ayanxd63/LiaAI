@@ -43,15 +43,12 @@ import androidx.navigation.NavController
 import com.Lia.assistant.data.ApiKeyStore
 import com.Lia.assistant.data.ChatEngine
 import com.Lia.assistant.data.EnginePreferences
-import com.Lia.assistant.data.EnginePreset
-import com.Lia.assistant.data.EnginePresetPreferences
 import com.Lia.assistant.data.NovaAppState
 import com.Lia.assistant.data.Personality
 import com.Lia.assistant.data.SetupWizardPreferences
 import com.Lia.assistant.ui.components.NovaButton
 import com.Lia.assistant.ui.components.NovaButtonType
 import com.Lia.assistant.ui.components.NovaChip
-import com.Lia.assistant.ui.components.NovaChipRow
 import com.Lia.assistant.ui.components.NovaGlassCard
 import com.Lia.assistant.ui.components.NovaInfoCard
 import com.Lia.assistant.ui.components.NovaTextField
@@ -359,7 +356,6 @@ private fun WizardEngineStep(
     val context = LocalContext.current
 
     var engine by remember { mutableStateOf(EnginePreferences.getEngine(context)) }
-    var preset by remember { mutableStateOf(EnginePresetPreferences.getPreset(context)) }
     val hasKey = remember { ApiKeyStore.hasKey(context) }
 
     Text(
@@ -428,28 +424,6 @@ private fun WizardEngineStep(
         }
     }
 
-    Spacer(modifier = Modifier.height(20.dp))
-    Text(
-        text = "Preset — Lia kis lehje mein jawab de?",
-        fontSize = 15.sp,
-        fontWeight = FontWeight.SemiBold,
-        color = colors.textPrimary
-    )
-    Spacer(modifier = Modifier.height(8.dp))
-    NovaChipRow(
-        chips = EnginePreset.values().map { it.displayName to (preset == it) },
-        onChipClick = { index ->
-            val picked = EnginePreset.values()[index]
-            EnginePresetPreferences.setPreset(context, picked)
-            preset = picked
-        }
-    )
-    Text(
-        text = preset.tagline,
-        fontSize = 13.sp,
-        color = colors.textSecondary,
-        modifier = Modifier.padding(top = 8.dp)
-    )
     Spacer(modifier = Modifier.height(20.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         NovaButton(text = "Back", onClick = onBack, type = NovaButtonType.SECONDARY)

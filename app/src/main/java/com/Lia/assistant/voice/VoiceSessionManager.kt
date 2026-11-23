@@ -32,7 +32,6 @@ import com.Lia.assistant.data.VoiceOutputPreferences
 import com.Lia.assistant.data.Personality
 import com.Lia.assistant.data.PersonalityRepository
 import com.Lia.assistant.data.PocketTtsVoicePreferences
-import com.Lia.assistant.forge.ForgeController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -1449,15 +1448,6 @@ object VoiceSessionManager {
                 if (sessionEpoch.get() != currentEpoch) return
                 _state.value = NovaOrbState.THINKING
                 _statusText.value = "Working on it..."
-
-                if (name == "build_website") {
-                    val forgePrompt = args.optString("prompt", "")
-                    ForgeController.start(currentContext, forgePrompt)
-                    val resp = JSONObject().apply { put("result", "forge_started") }
-                    client?.sendToolResponse(id, name, resp)
-                    _state.value = NovaOrbState.LISTENING
-                    return
-                }
 
                 // Already executed locally from the voice transcript (see
                 // onInputTranscript)? Tell Gemini it is done, do not run twice.

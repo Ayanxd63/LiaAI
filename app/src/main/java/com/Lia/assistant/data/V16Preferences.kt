@@ -7,26 +7,6 @@ import android.content.Context
  * NovaPreferences file (no new files, no new dependencies).
  */
 
-/** Human-paced typing (P1-12): replies type out word by word at a human pace. Default OFF. */
-object ChatDisplayPreferences {
-
-    fun isHumanPacedTyping(context: Context): Boolean {
-        return NovaPreferences.getBoolean(
-            context,
-            NovaPreferences.Keys.HUMAN_PACED_TYPING,
-            false
-        )
-    }
-
-    fun setHumanPacedTyping(context: Context, enabled: Boolean) {
-        NovaPreferences.putBoolean(
-            context,
-            NovaPreferences.Keys.HUMAN_PACED_TYPING,
-            enabled
-        )
-    }
-}
-
 /**
  * P0-5 — the device TTS voice the user picked in the voice picker.
  * Empty = auto: Lia's cute voice (best female system voice, pitch 1.2,
