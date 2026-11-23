@@ -129,10 +129,20 @@ dependencies {
     // V15: Keystore-backed encrypted credential storage (security-crypto
     // 1.1.0, stable July 2025 — verified on Google Maven 2026-11-22).
     implementation("androidx.security:security-crypto:1.1.0")
+    // V19: on-device voice engine — sherpa-onnx 2.0.3 (Apache-2.0),
+    // restored from V17 for Pocket TTS only. It is NOT on Maven
+    // Central, so there is no Maven coordinate to pin: CI downloads
+    // the release tarball + JVM jar (SHA-256 checked, see
+    // .github/workflows/android.yml) into app/libs + jniLibs. A local
+    // build without that step fails on the missing jar file — build on
+    // GitHub Actions, like V15's first builds. (No TensorFlow Lite:
+    // memory embeddings stay out in V19.)
+    implementation(files("libs/sherpa-onnx-jvm-2.0.3.jar"))
     // V18 diet: the offline LLM (llama-lib) and the on-device voice
     // engine (sherpa-onnx jar + TensorFlow Lite) were removed. The
     // voice stack is now Vosk wake word + system SpeechRecognizer /
-    // system TTS + the online Kokoro voice (OkHttp, already here).
+    // system TTS + the online Kokoro voice (OkHttp, already here) +
+    // (V19) Pocket TTS via sherpa-onnx above.
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
