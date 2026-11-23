@@ -103,7 +103,7 @@ fun AboutScreen(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Lia AI is a real-time full-duplex personal AI companion crafted in Kotlin & Jetpack Compose with custom AGSL 3D shaders, multi-lingual intelligence (Hindi, Hinglish, English), and the Website Forge.",
+                    text = "Lia AI is a real-time full-duplex personal AI companion crafted in Kotlin & Jetpack Compose with custom AGSL 3D shaders and multi-lingual intelligence (Hindi, Hinglish, English).",
                     fontSize = 14.sp,
                     color = colors.textPrimary,
                     lineHeight = 22.sp
