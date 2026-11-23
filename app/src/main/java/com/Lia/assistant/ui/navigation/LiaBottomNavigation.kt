@@ -15,7 +15,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -76,13 +75,6 @@ fun LiaBottomNavigation(
 
             // Center Spacer for raised talk orb
             Box(modifier = Modifier.size(54.dp))
-
-            NavItem(
-                icon = Icons.Default.History,
-                label = "History",
-                isSelected = currentRoute == "history",
-                onClick = { navController.navigate("history") { launchSingleTop = true } }
-            )
 
             NavItem(
                 icon = Icons.Default.Settings,
