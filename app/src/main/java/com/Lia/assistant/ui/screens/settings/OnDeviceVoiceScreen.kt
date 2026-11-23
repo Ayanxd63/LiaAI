@@ -43,6 +43,7 @@ import com.Lia.assistant.ui.components.NovaGlassCard
 import com.Lia.assistant.ui.components.NovaSettingsRow
 import com.Lia.assistant.ui.theme.LocalNovaColors
 import com.Lia.assistant.ui.theme.nightSky
+import com.Lia.assistant.voice.HindiTtsEngine
 import com.Lia.assistant.voice.OnlineTtsEngine
 import com.Lia.assistant.voice.PocketTtsEngine
 import com.Lia.assistant.voice.SherpaRuntime
@@ -53,19 +54,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * V19 — on-device voice manager (Settings → On-device voice), restored
- * from V17 and stripped to Pocket TTS only.
+ * V21 — on-device voice manager (Settings → On-device voice).
  *
- * The screen holds the ONE on-device engine V19 brings back: the Lia
- * voice model download (Wi-Fi only, resumable, SHA-256 verified),
- * its Lia/Loona voice picker, and its licence. Nothing downloads
+ * The screen holds the on-device engines: the Hindi voice
+ * (Supertonic 3, ~139 MB — the V21 fix for the foreign accent),
+ * the Lia voice (Pocket TTS, ~191 MB), and the Urdu/Hindi
+ * listening models (Shruti, ~51 MB each). Each model downloads on
+ * Wi-Fi only, resumable, SHA-256 verified. Nothing downloads
  * until the user taps Download; the toggle alone never fetches
- * anything. The whole screen degrades gracefully on phones whose CPU
- * cannot run sherpa-onnx (see [SherpaRuntime]).
+ * anything. The whole screen degrades gracefully on phones whose
+ * CPU cannot run sherpa-onnx (see [SherpaRuntime]).
  *
- * Size: Lia voice ~191 MB. Moonshine STT, the VAD gate, speaker
- * voice-match, laugh detection and memory embeddings stay OUT (V18
- * diet) — their rows, toggles and preferences were deleted here.
+ * Moonshine STT (English), the VAD gate, speaker voice-match,
+ * laugh detection and memory embeddings stay OUT (V18 diet) —
+ * their rows, toggles and preferences were deleted here.
  */
 @Composable
 fun OnDeviceVoiceScreen(
@@ -123,8 +125,16 @@ fun OnDeviceVoiceScreen(
 
     fun iconFor(model: VoiceModel) = Icons.Default.RecordVoiceOver
 
-    fun hintFor(model: VoiceModel): String =
-        "Lia ki apni awaz — bina key, bina internet. English bolti hai; Roman Urdu English lehje mein parhti hai."
+    fun hintFor(model: VoiceModel): String = when (model.id) {
+        VoiceModelManager.MODEL_SUPERTONIC_TTS.id ->
+            "Hindi bolne wali on-device awaz — Roman Urdu ko Devanagari mein badal kar desi lehje mein bolti hai. Yehi V21 ki awaz hai."
+        VoiceModelManager.MODEL_SHRUTI_URDU.id ->
+            "Urdu sunne wala on-device model — Lia tumhari Urdu behtar sunegi, bina internet."
+        VoiceModelManager.MODEL_SHRUTI_HINDI.id ->
+            "Hindi sunne wala on-device model — Urdu model na ho to ye istemal hota hai."
+        else ->
+            "Lia ki apni awaz — bina key, bina internet. English bolti hai; Roman Urdu English lehje mein parhti hai."
+    }
 
     Column(
         modifier = modifier
@@ -184,6 +194,11 @@ fun OnDeviceVoiceScreen(
                 NovaSettingsRow(
                     title = "Lia ki awaz",
                     subtitle = when (engineChoice) {
+                        VoiceOutputEngine.HINDI -> if (readyById[VoiceModelManager.MODEL_SUPERTONIC_TTS.id] == true) {
+                            "Hindi voice — desi lehja, bina key, bina internet"
+                        } else {
+                            "Hindi voice — model abhi download nahi hua (neeche se karo)"
+                        }
                         VoiceOutputEngine.ONLINE -> "Internet voice (Kokoro) — insano jaisi awaz, bina key · ~20 ghantay mein, phir offline voice"
                         VoiceOutputEngine.POCKET -> if (readyById[VoiceModelManager.MODEL_POCKET_TTS.id] == true) {
                             "On-device Lia voice — bina key, bina internet"
@@ -194,9 +209,10 @@ fun OnDeviceVoiceScreen(
                     },
                     icon = Icons.Default.RecordVoiceOver,
                     onClick = {
-                        // Tap cycles: internet → on-device → system.
+                        // Tap cycles: internet → Hindi → on-device → system.
                         val next = when (engineChoice) {
-                            VoiceOutputEngine.ONLINE -> VoiceOutputEngine.POCKET
+                            VoiceOutputEngine.ONLINE -> VoiceOutputEngine.HINDI
+                            VoiceOutputEngine.HINDI -> VoiceOutputEngine.POCKET
                             VoiceOutputEngine.POCKET -> VoiceOutputEngine.SYSTEM
                             VoiceOutputEngine.SYSTEM -> VoiceOutputEngine.ONLINE
                         }
@@ -424,13 +440,42 @@ fun OnDeviceVoiceScreen(
                                 type = NovaButtonType.SECONDARY
                             )
                         }
-                        if (isReady && model.id == VoiceModelManager.MODEL_POCKET_TTS.id) {
+                        if (isReady && (model.id == VoiceModelManager.MODEL_POCKET_TTS.id ||
+                                model.id == VoiceModelManager.MODEL_SUPERTONIC_TTS.id)
+                        ) {
+                            val isHindiModel = model.id == VoiceModelManager.MODEL_SUPERTONIC_TTS.id
                             NovaButton(
                                 text = if (testingVoice) "Bol rahi hai…" else "Test voice",
                                 onClick = {
                                     if (testingVoice) return@NovaButton
                                     testingVoice = true
                                     scope.launch(Dispatchers.IO) {
+                                        if (isHindiModel) {
+                                            // V21: Hindi voice test — Roman Urdu
+                                            // sentence, transliterated inside
+                                            // the engine to Devanagari.
+                                            val engine = HindiTtsEngine.create(context)
+                                            if (engine == null) {
+                                                withContext(Dispatchers.Main) {
+                                                    testingVoice = false
+                                                    errorById = errorById + (model.id to
+                                                        "Voice engine start nahi ho saka.")
+                                                }
+                                                return@launch
+                                            }
+                                            engine.speak(
+                                                "Assalam-o-Alaikum! Main Lia hun — tumhari apni Hindi awaz, bina internet, bina key ke.",
+                                                onDone = {
+                                                    engine.release()
+                                                    testingVoice = false
+                                                },
+                                                onError = {
+                                                    engine.release()
+                                                    testingVoice = false
+                                                }
+                                            )
+                                            return@launch
+                                        }
                                         val engine = PocketTtsEngine.create(context, pocketVoice)
                                         if (engine == null) {
                                             withContext(Dispatchers.Main) {
@@ -471,7 +516,9 @@ fun OnDeviceVoiceScreen(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
         )
         Text(
-            text = "Attribution: Lia voice — Kyutai Pocket TTS (CC-BY-4.0) via " +
+            text = "Attribution: Hindi voice — Supertonic 3 (MIT, Supertone Inc.) via " +
+                "sherpa-onnx (Apache-2.0). Urdu/Hindi sunne wala — Shruti (Apache-2.0, " +
+                "UDGAM Labs). Lia voice — Kyutai Pocket TTS (CC-BY-4.0) via " +
                 "sherpa-onnx (Apache-2.0). " +
                 "Online voice — Kokoro-82M via mesmer.tools (free, no key, 20/hour).",
             fontSize = 12.sp,
