@@ -59,9 +59,9 @@ import com.Lia.assistant.ui.theme.nightSky
  * V16 (P0-3) — first-run setup wizard, 3 steps.
  *
  * Step 1: permissions, each ASKED in sequence (one system dialog per
- * permission — that is how Android works). Step 2: engine choice +
- * Fast/Warm/Smart preset. Step 3: persona + names. Skip is always
- * available, and the wizard is re-runnable from Settings.
+ * permission — that is how Android works). Step 2: engine choice
+ * (Warm reply style is fixed — V20 removed the preset picker).
+ * Step 3: persona + names. Skip is always available.
  *
  * The honest line is on the screen itself: Android kisi app ko khud se
  * permissions on karne nahi deta — har ek pe user ko Allow dabana parta

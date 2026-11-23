@@ -16,8 +16,8 @@ object ChatPromptBuilder {
         // V16 (P1-7): Lia's own voice beats (pet-name ladder, short
         // replies, owning mistakes). Empty when the caller has none.
         beats: String? = null,
-        // V16 (P0-6): the engine preset's style instruction
-        // (Fast/Warm/Smart). Empty when no preset is active.
+        // V20: the Warm reply-style instruction (presets removed —
+        // always Warm). Empty when not passed.
         presetInstruction: String? = null
     ): String {
         val sections = mutableListOf<String>()
@@ -33,7 +33,7 @@ object ChatPromptBuilder {
             sections.add(beats)
         }
 
-        // V16: engine preset style (Fast/Warm/Smart).
+        // V20: Warm reply style (always).
         if (!presetInstruction.isNullOrBlank()) {
             sections.add(presetInstruction)
         }
