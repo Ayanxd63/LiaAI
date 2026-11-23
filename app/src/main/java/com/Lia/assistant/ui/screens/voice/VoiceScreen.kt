@@ -255,13 +255,16 @@ fun VoiceScreen(
                     // a 20s timeout and an API/key failure are different
                     // problems with different fixes, so they must not
                     // all read as "Soch rahi hun…".
+                    // V19: the chat deadline is 30s now, and an ERROR
+                    // state gets a retry button (S8) — the overlay is
+                    // tappable again instead of only closable.
                     if (state == NovaOrbState.ERROR) {
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = when {
                                 statusText.contains("Zyada der", ignoreCase = true) ||
                                     lastError?.contains("imeout", ignoreCase = true) == true ->
-                                    "Timeout: 20 second mein jawab nahi aaya — " +
+                                    "Timeout: 30 second mein jawab nahi aaya — " +
                                         "dobara bolo."
                                 lastError?.contains("key", ignoreCase = true) == true ->
                                     "API key ka masla hai — Settings > Gemini API Key " +
@@ -271,6 +274,11 @@ fun VoiceScreen(
                             },
                             fontSize = 14.sp,
                             color = colors.error
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        NovaButton(
+                            text = "Dobara try karo",
+                            onClick = { VoiceSessionManager.retryListening() }
                         )
                     }
 

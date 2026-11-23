@@ -10,11 +10,13 @@ import android.util.Log
 import com.Lia.assistant.data.NovaPreferences
 import com.Lia.assistant.data.OnlineTtsQualityPreferences
 import com.Lia.assistant.data.OnlineTtsVoicePreferences
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -61,9 +63,8 @@ import java.util.concurrent.TimeUnit
  *   sentence boundaries and spoken chunk by chunk (each chunk is one
  *   generation when it is not cached).
  * - mesmer.tools is a small third-party service: it can be slow or
- *   down. It is NEVER the only voice — the chain is always
- *   online → system TTS, and a failure shows
- *   the reply as text rather than stalling (see
+ *   down. It is NEVER the only voice — the V19 chain is
+ *   POCKET → ONLINE → SYSTEM, and a failure falls back at once (see
  *   VoiceSessionManager.speakVoiceChain).
  *
  * FEELINGS / HUMAN EMOTIONS: the API takes text + voice id only —
@@ -96,6 +97,9 @@ object OnlineTtsEngine {
 
     /** Server limit: 20 generations per hour per IP. */
     const val HOURLY_LIMIT = 20
+
+    /** V19: hard deadline for one online-voice synthesis (see speak). */
+    private const val ONLINE_TTS_TIMEOUT_MS = 20_000L
 
     private const val QUOTA_WINDOW_MILLIS = 60L * 60L * 1000L
 
@@ -362,6 +366,15 @@ object OnlineTtsEngine {
      * [onError] fires with the typed failure (the caller falls back
      * to the next voice engine). Callbacks run on the main
      * thread. [stop] cancels playback.
+     *
+     * V19 (S7 fix): synthesis has a hard 20s deadline. The old code
+     * bounded one OkHttp call at 30s but retried twice per chunk and
+     * walked chunks one by one — a slow service held the overlay on
+     * "Lia bol rahi hai…" for up to ~60s per chunk. Now the whole
+     * synthesis dies at 20s and the chain moves on. Playback itself
+     * needs no deadline: it plays local files, and MediaPlayer's
+     * completion/error callbacks always fire (prepare() on a local
+     * file either succeeds at once or throws).
      */
     fun speak(
         context: Context,
@@ -377,12 +390,25 @@ object OnlineTtsEngine {
                 val quality = OnlineTtsQualityPreferences.getQuality(context)
                 val preferred = OnlineTtsVoicePreferences.getVoiceId(context)
                 val voiceId = voiceForText(text, preferred)
-                val files = synthesize(context, text, quality, voiceId)
+                val files = withTimeoutOrNull(ONLINE_TTS_TIMEOUT_MS) {
+                    synthesize(context, text, quality, voiceId)
+                } ?: throw OnlineTtsException(
+                    OnlineTtsException.Kind.SERVICE,
+                    "Online voice slow hai — device voice bol rahi hai."
+                )
                 if (files.isEmpty()) throw OnlineTtsException(
                     OnlineTtsException.Kind.SERVICE,
                     "Bolne ke liye kuch nahi mila."
                 )
                 withContext(Dispatchers.IO) { playFiles(files, onDone, onError) }
+            } catch (e: CancellationException) {
+                // V19 (S11 fix): a cancelled speak (user stopped the
+                // session, or a new speak started) must stay silent —
+                // the old code caught this as a normal error and fired
+                // onError, so the fallback chain spoke a reply into a
+                // dead session. Re-raise; nothing downstream runs.
+                isSpeaking = false
+                throw e
             } catch (e: OnlineTtsException) {
                 isSpeaking = false
                 mainHandler.post { onError?.invoke(e) }
