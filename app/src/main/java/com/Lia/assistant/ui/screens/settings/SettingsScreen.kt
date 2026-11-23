@@ -2,6 +2,8 @@ package com.Lia.assistant.ui.screens.settings
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,13 +28,17 @@ import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Message
@@ -93,8 +99,11 @@ import com.Lia.assistant.voice.AlwaysListeningWatchdogWorker
 import com.Lia.assistant.data.VoiceOutputEngine
 import com.Lia.assistant.data.VoiceOutputPreferences
 import com.Lia.assistant.voice.OnlineTtsEngine
+import com.Lia.assistant.voice.PocketTtsEngine
 import com.Lia.assistant.voice.VoiceForegroundService
 import com.Lia.assistant.voice.WakeWordModelManager
+import com.Lia.assistant.voice.WeatherClient
+import com.Lia.assistant.voice.WeatherNow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -122,13 +131,17 @@ fun SettingsScreen(
     var memoryFactCount by remember { mutableStateOf(0) }
     // V18: Lia's voice choice (ONLINE / SYSTEM) + online quota used
     // this hour, refreshed on entry.
+    // V19: POCKET is back — pocketReady tracks whether the ~191 MB
+    // model is downloaded (cached SHA check, on IO).
     var voiceEngine by remember { mutableStateOf(VoiceOutputPreferences.getEngine(context)) }
     var showVoiceDialog by remember { mutableStateOf(false) }
     var onlineQuotaUsed by remember { mutableStateOf(0) }
+    var pocketReady by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
             memoryFactCount = FactMemoryStore.loadFacts(context).size
             onlineQuotaUsed = OnlineTtsEngine.quotaUsed(context)
+            pocketReady = PocketTtsEngine.isReady(context)
         }
     }
 
@@ -206,6 +219,37 @@ fun SettingsScreen(
                         (e.localizedMessage ?: "unknown error")
                 }
             }
+        }
+    }
+
+    // V19: weather moved here from Home (V16 info card). Cached result
+    // first, fresh fetch on tap; location permission is asked only
+    // from this row, never on open.
+    var weather by remember { mutableStateOf<WeatherNow?>(WeatherClient.loadCached(context)) }
+    var weatherNote by remember { mutableStateOf<String?>(null) }
+    val locationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) refreshWeather(context, scope) { result ->
+            result.onSuccess { weather = it; weatherNote = null }
+                .onFailure { weatherNote = "Mausam nahi mila — net check karo" }
+        } else {
+            weatherNote = "Location allow karo to mausam dikhaun"
+        }
+    }
+
+    fun onWeatherRowTap() {
+        if (ContextCompat.checkSelfPermission(
+                context, Manifest.permission.ACCESS_COARSE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            weatherNote = "Location allow karo to mausam dikhaun"
+            locationLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+            return
+        }
+        refreshWeather(context, scope) { result ->
+            result.onSuccess { weather = it; weatherNote = null }
+                .onFailure { weatherNote = "Mausam nahi mila — net check karo" }
         }
     }
 
@@ -329,9 +373,16 @@ fun SettingsScreen(
                 // V18: Lia's voice — ONLINE (Kokoro, human-like, ~20/hour)
                 // or SYSTEM (device TTS). The on-device Pocket TTS voice
                 // was removed in the V18 diet; ONLINE stays the default.
+                // V19: POCKET is back and is the default when downloaded.
                 NovaSettingsRow(
                     title = "Lia's voice",
                     subtitle = when (voiceEngine) {
+                        VoiceOutputEngine.POCKET ->
+                            if (pocketReady) {
+                                "On-device Lia voice — bina internet, tez awaz"
+                            } else {
+                                "On-device Lia voice — model download nahi hua (neeche se karo)"
+                            }
                         VoiceOutputEngine.ONLINE ->
                             "Internet voice (Kokoro) — insano jaisi awaz · " +
                                 "$onlineQuotaUsed/20 is ghantay mein"
@@ -340,6 +391,17 @@ fun SettingsScreen(
                     },
                     icon = Icons.Default.RecordVoiceOver,
                     onClick = { showVoiceDialog = true }
+                )
+                // V19: Pocket TTS model download + Lia/Loona picker.
+                NovaSettingsRow(
+                    title = "On-device voice",
+                    subtitle = if (pocketReady) {
+                        "Lia voice downloaded — ready (~191 MB)"
+                    } else {
+                        "Lia voice download karo — Wi-Fi, ~191 MB, ek dafa"
+                    },
+                    icon = Icons.Default.RecordVoiceOver,
+                    onClick = { navController.navigate("on_device_voice") }
                 )
                 // V16 (P1-12): human-paced typing — replies type out word
                 // by word at a human pace (90ms/word) instead of streaming
@@ -624,6 +686,38 @@ fun SettingsScreen(
                     icon = Icons.Default.List,
                     onClick = { navController.navigate("actions") }
                 )
+                // V19: moved here from Home — Create Image / Write /
+                // Prompt Generator and the weather card. Home is now
+                // only the character + mic + ask bar; these live here
+                // so nothing is lost. (Prompt Generator is ALSO still
+                // a chip in Chat.)
+                NovaSettingsRow(
+                    title = "Create Image",
+                    subtitle = "Photos into sketches",
+                    icon = Icons.Default.Image,
+                    onClick = { navController.navigate("create_image") }
+                )
+                NovaSettingsRow(
+                    title = "Write",
+                    subtitle = "Notes, code, content",
+                    icon = Icons.Default.Edit,
+                    onClick = { navController.navigate("write") }
+                )
+                NovaSettingsRow(
+                    title = "Prompt Generator",
+                    subtitle = "Better prompts for chat & images — free",
+                    icon = Icons.Default.Lightbulb,
+                    onClick = { navController.navigate("prompt_generator") }
+                )
+                NovaSettingsRow(
+                    title = "Weather",
+                    subtitle = weather?.let {
+                        "${it.tempC.toInt()}°C — ${it.description}" +
+                            (it.humidity?.let { h -> " · $h% humidity" } ?: "")
+                    } ?: (weatherNote ?: "Tap karo — mausam dekho"),
+                    icon = Icons.Default.Cloud,
+                    onClick = { onWeatherRowTap() }
+                )
                 NovaSettingsRow(
                     title = "Sub-agents",
                     subtitle = "Research, Story, Song list — dated files banate hain",
@@ -801,9 +895,9 @@ fun SettingsScreen(
         )
     }
 
-    // V18: Lia's voice picker — ONLINE (Kokoro) / SYSTEM (device TTS).
-    // ONLINE is the default; a quota-exhausted or offline ONLINE
-    // reply falls back to SYSTEM automatically.
+    // V19: Lia's voice picker — POCKET (on-device, default when
+    // downloaded) / ONLINE (Kokoro) / SYSTEM (device TTS). The chain
+    // is POCKET → ONLINE → SYSTEM, so a dead engine falls back at once.
     if (showVoiceDialog) {
         AlertDialog(
             onDismissRequest = { showVoiceDialog = false },
@@ -814,6 +908,39 @@ fun SettingsScreen(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
                         .padding(horizontal = 12.dp, vertical = 10.dp)
+                    // POCKET — on-device Lia voice, fast, no internet.
+                    Row(
+                        modifier = optionModifier.clickable {
+                            VoiceOutputPreferences.setEngine(context, VoiceOutputEngine.POCKET)
+                            voiceEngine = VoiceOutputEngine.POCKET
+                            showVoiceDialog = false
+                        },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "On-device Lia voice (Pocket)",
+                                fontSize = 15.sp,
+                                color = colors.textPrimary
+                            )
+                            Text(
+                                text = if (pocketReady) {
+                                    "Bina internet, tez awaz — downloaded, ready"
+                                } else {
+                                    "Bina internet, tez awaz — pehle On-device voice se download karo"
+                                },
+                                fontSize = 12.sp,
+                                color = colors.textSecondary
+                            )
+                        }
+                        if (voiceEngine == VoiceOutputEngine.POCKET) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = colors.accent
+                            )
+                        }
+                    }
                     // ONLINE — human-like internet voice, ~20/hour.
                     Row(
                         modifier = optionModifier.clickable {
@@ -830,7 +957,7 @@ fun SettingsScreen(
                                 color = colors.textPrimary
                             )
                             Text(
-                                text = "Insano jaisi awaz, bina key · ~20 ghantay mein, phir device voice",
+                                text = "Insano jaisi awaz, bina key · ~20 ghantay mein, phir on-device / device voice",
                                 fontSize = 12.sp,
                                 color = colors.textSecondary
                             )
@@ -958,5 +1085,24 @@ fun SettingsScreen(
             },
             containerColor = colors.surfaceRaised
         )
+    }
+}
+
+/** V19: fetch fresh weather for the last-known location. Never throws. */
+private fun refreshWeather(
+    context: android.content.Context,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onResult: (Result<WeatherNow>) -> Unit
+) {
+    scope.launch(Dispatchers.IO) {
+        val location = WeatherClient.lastKnownLocation(context)
+        if (location == null) {
+            withContext(Dispatchers.Main) {
+                onResult(Result.failure(IllegalStateException("No location")))
+            }
+            return@launch
+        }
+        val result = WeatherClient.fetch(context, location.first, location.second)
+        withContext(Dispatchers.Main) { onResult(result) }
     }
 }
