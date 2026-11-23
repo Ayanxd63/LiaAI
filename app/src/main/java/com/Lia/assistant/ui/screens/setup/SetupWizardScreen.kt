@@ -50,6 +50,7 @@ import com.Lia.assistant.data.Personality
 import com.Lia.assistant.data.SetupWizardPreferences
 import com.Lia.assistant.ui.components.NovaButton
 import com.Lia.assistant.ui.components.NovaButtonType
+import com.Lia.assistant.ui.components.NovaChip
 import com.Lia.assistant.ui.components.NovaChipRow
 import com.Lia.assistant.ui.components.NovaGlassCard
 import com.Lia.assistant.ui.components.NovaInfoCard
@@ -68,6 +69,12 @@ import com.Lia.assistant.ui.theme.nightSky
  * The honest line is on the screen itself: Android kisi app ko khud se
  * permissions on karne nahi deta — har ek pe user ko Allow dabana parta
  * hai. Lia can only ask; she can never grant anything herself.
+ *
+ * V19 polish (Maya pattern): one prominent "Sab allow karo" button
+ * that fires the system prompts one by one; every permission is its
+ * own card with a status chip ("Baaki hai" → "✓ Allowed"); ONLY the
+ * microphone gates "Aage badho" — everything else is optional and
+ * says so. Each card carries one plain WHY line.
  */
 @Composable
 fun SetupWizardScreen(
@@ -154,7 +161,9 @@ private data class WizardPermission(
     val permission: String,
     val name: String,
     val why: String,
-    val applies: Boolean = true
+    val applies: Boolean = true,
+    /** Only the microphone gates "Aage badho" — the rest are optional. */
+    val required: Boolean = false
 )
 
 @Composable
@@ -181,12 +190,13 @@ private fun WizardPermissionsStep(
         WizardPermission(
             Manifest.permission.RECORD_AUDIO,
             "Microphone",
-            "Baat karne ke liye — bina iske Lia sun nahi sakti."
+            "Lia se baat karne ke liye — bina iske Lia sun nahi sakti.",
+            required = true
         ),
         WizardPermission(
             Manifest.permission.POST_NOTIFICATIONS,
             "Notifications",
-            "Jab Lia background mein kaam kare to bataye.",
+            "Lia ko background mein chalaye rakhne ke liye.",
             applies = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
         ),
         WizardPermission(
@@ -196,8 +206,8 @@ private fun WizardPermissionsStep(
         ),
         WizardPermission(
             Manifest.permission.CALL_PHONE,
-            "Direct call",
-            "Dialer khole baghair direct call karne ke liye."
+            "Phone calls",
+            "Tumhare liye call karne ke liye — dialer khole baghair direct call."
         ),
         WizardPermission(
             Manifest.permission.ACCESS_COARSE_LOCATION,
@@ -207,7 +217,7 @@ private fun WizardPermissionsStep(
         WizardPermission(
             Manifest.permission.CAMERA,
             "Camera",
-            "Flashlight on/off karne ke liye."
+            "Jo tum dikhao, use dekhne ke liye."
         )
     ).filter { it.applies }
 
@@ -227,6 +237,10 @@ private fun WizardPermissionsStep(
     @Suppress("UNUSED_VARIABLE")
     val tick = resumeCount
 
+    // Only the microphone gates the continue button.
+    val micGranted = isGranted(Manifest.permission.RECORD_AUDIO)
+    val allGranted = permissions.all { isGranted(it.permission) }
+
     Text(
         text = "Permissions",
         fontSize = 22.sp,
@@ -245,59 +259,71 @@ private fun WizardPermissionsStep(
     )
     Spacer(modifier = Modifier.height(16.dp))
 
-    NovaGlassCard(modifier = Modifier.fillMaxWidth()) {
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            for (item in permissions) {
-                val granted = isGranted(item.permission)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(14.dp)
-                            .clip(CircleShape)
-                            .background(if (granted) colors.lagoon else colors.error)
-                    )
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = item.name,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 15.sp,
-                            color = colors.textPrimary
-                        )
-                        Text(
-                            text = item.why,
-                            fontSize = 12.sp,
-                            color = colors.textSecondary
-                        )
-                    }
-                    Text(
-                        text = if (granted) "✓ Allowed" else "Ask",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (granted) colors.lagoon else colors.accent,
-                        modifier = Modifier.clickable {
-                            if (!granted) singleLauncher.launch(item.permission)
-                        }
-                    )
-                }
-            }
-        }
-    }
-    Spacer(modifier = Modifier.height(16.dp))
+    // V19: one prominent button — Android then shows the system
+    // prompts one by one, in order. Tapping it twice asks only what
+    // is still missing.
     NovaButton(
-        text = "Ask all permissions",
+        text = "Sab allow karo",
         onClick = {
             val missing = permissions
                 .map { it.permission }
                 .filter { !isGranted(it) }
                 .toTypedArray()
             if (missing.isNotEmpty()) multiLauncher.launch(missing)
-        }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = !allGranted
     )
-    Spacer(modifier = Modifier.height(12.dp))
+    Spacer(modifier = Modifier.height(16.dp))
+
+    // One card per permission, with a status chip. Tapping the chip
+    // asks for that one permission only.
+    for (item in permissions) {
+        val granted = isGranted(item.permission)
+        NovaGlassCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = item.name,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 15.sp,
+                            color = colors.textPrimary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (item.required) "Zaroori" else "Optional",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (item.required) colors.accent else colors.textSecondary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = item.why,
+                        fontSize = 12.sp,
+                        color = colors.textSecondary
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                NovaChip(
+                    text = if (granted) "✓ Allowed" else "Baaki hai",
+                    selected = granted,
+                    onClick = {
+                        if (!granted) singleLauncher.launch(item.permission)
+                    }
+                )
+            }
+        }
+    }
+    Spacer(modifier = Modifier.height(16.dp))
     NovaInfoCard(
         title = "Background setup (battery / autostart)",
         body = "Ye system settings se hota hai — wahan ja kar battery " +
@@ -306,7 +332,20 @@ private fun WizardPermissionsStep(
         onClick = onOpenBackgroundSetup
     )
     Spacer(modifier = Modifier.height(20.dp))
-    NovaButton(text = "Next — engine", onClick = onNext)
+    NovaButton(
+        text = "Aage badho",
+        onClick = onNext,
+        enabled = micGranted
+    )
+    if (!micGranted) {
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Aage badhne ke liye microphone chahiye — upar " +
+                "\"Sab allow karo\" dabao, phir mic pe Allow karo.",
+            fontSize = 13.sp,
+            color = colors.textSecondary
+        )
+    }
 }
 
 // ------------------------------------------------------------------ step 2

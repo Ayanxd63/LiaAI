@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +42,8 @@ import com.Lia.assistant.data.Personality
 import com.Lia.assistant.ui.character.CharacterView
 import com.Lia.assistant.ui.character.LiaCharacter
 import com.Lia.assistant.ui.components.NovaButton
+import com.Lia.assistant.ui.components.NovaButtonType
+import com.Lia.assistant.ui.components.NovaGlassCard
 import com.Lia.assistant.ui.components.NovaTextField
 import com.Lia.assistant.ui.fx.LiaOrb3D
 import com.Lia.assistant.ui.fx.NovaOrbStyle
@@ -50,6 +53,7 @@ import com.Lia.assistant.ui.theme.nightSky
 import com.Lia.assistant.voice.NovaOrbState
 import com.Lia.assistant.voice.SpeechLevelTracker
 import com.Lia.assistant.voice.VoiceSessionManager
+import com.Lia.assistant.voice.WelcomeSpeaker
 
 /**
  * V19 — Home, simplified ("Maya se seekho": orb + mic, bas).
@@ -130,6 +134,37 @@ fun HomeScreen(
     // Ask bar text — type here, Ask goes straight to Chat.
     var askText by remember { mutableStateOf("") }
 
+    // V19: spoken first-run welcome — Lia greets out loud once, on
+    // first launch after onboarding (Pocket TTS first when downloaded,
+    // else Online → System; no key needed). The card shows the same
+    // greeting as text with a visible Skip; speaking never blocks the
+    // UI, and tapping the hero / Ask dismisses it first so it never
+    // overlaps a voice session. It never auto-plays again — the flag
+    // is set on speak-done OR skip.
+    var showWelcome by remember { mutableStateOf(!WelcomeSpeaker.hasSpoken(context)) }
+
+    fun dismissWelcome() {
+        WelcomeSpeaker.stop()
+        WelcomeSpeaker.markSpoken(context)
+        showWelcome = false
+    }
+
+    LaunchedEffect(showWelcome) {
+        if (!showWelcome) return@LaunchedEffect
+        // Never speak over a live voice session.
+        if (VoiceSessionManager.isActive.value) {
+            dismissWelcome()
+            return@LaunchedEffect
+        }
+        WelcomeSpeaker.speak(
+            context,
+            WelcomeSpeaker.welcomeText(appState.personality, appState.assistantName)
+        ) {
+            WelcomeSpeaker.markSpoken(context)
+            showWelcome = false
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -139,6 +174,45 @@ fun HomeScreen(
     ) {
         Spacer(modifier = Modifier.weight(1f))
 
+        // First-run welcome card — text + Skip, while Lia speaks it.
+        if (showWelcome) {
+            NovaGlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+            ) {
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    Text(
+                        text = WelcomeSpeaker.welcomeDisplayText(
+                            appState.personality,
+                            appState.assistantName
+                        ),
+                        fontFamily = SerifFontFamily,
+                        fontSize = 15.sp,
+                        color = colors.textPrimary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Bol rahi hai…",
+                            fontSize = 12.sp,
+                            color = colors.textSecondary
+                        )
+                        NovaButton(
+                            text = "Skip",
+                            onClick = { dismissWelcome() },
+                            type = NovaButtonType.TEXT
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+        }
+
         // Hero: the home character (2D illustration with lip-sync) when
         // enabled, otherwise the 3D orb exactly as before. The orb code
         // is kept as the fallback — it is not removed. The pulsing orb
@@ -147,7 +221,10 @@ fun HomeScreen(
         Box(
             modifier = Modifier
                 .size(orbSize)
-                .clickable { navController.navigate("voice") },
+                .clickable {
+                    dismissWelcome()
+                    navController.navigate("voice")
+                },
             contentAlignment = Alignment.Center
         ) {
             if (characterSettings.homeCharacterEnabled) {
@@ -222,6 +299,7 @@ fun HomeScreen(
                 text = "Ask",
                 onClick = {
                     if (askText.isNotBlank()) {
+                        dismissWelcome()
                         ChatPrefill.set(askText)
                         askText = ""
                         navController.navigate("chat")
