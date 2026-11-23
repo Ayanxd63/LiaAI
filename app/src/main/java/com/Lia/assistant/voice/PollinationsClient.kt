@@ -1,15 +1,23 @@
 package com.Lia.assistant.voice
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * V12 — the no-key AI engine: Pollinations.ai.
@@ -64,9 +72,40 @@ object PollinationsClient {
 
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(180, TimeUnit.SECONDS)
+        // V19 (S1 fix): was 180s — a hung first attempt could wedge
+        // the voice overlay for 3 x 180s. 30s is the backstop; the
+        // voice turn's own 30s deadline cancels the call sooner (see
+        // executeCancellable). Text chat shares this client and also
+        // benefits: a hung reply can never block longer than 30s per
+        // attempt now.
+        .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
+
+    /**
+     * V19 (S1 fix) — execute [request] so that cancelling the calling
+     * coroutine CANCELS the HTTP call itself. The old blocking
+     * `execute()` ignored coroutine cancellation entirely, so the V15
+     * `withTimeoutOrNull(20s)` around `chat()` could never fire
+     * mid-request — the overlay wedged on "Soch rahi hun…" for up to
+     * 9 minutes (3 attempts x 180s read timeout). With `enqueue()` +
+     * `invokeOnCancellation { call.cancel() }` the 30s voice deadline
+     * is real: the call dies within milliseconds of the timeout.
+     */
+    private suspend fun executeCancellable(request: Request): Response =
+        suspendCancellableCoroutine { cont ->
+            val call = httpClient.newCall(request)
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isActive) cont.resumeWithException(e)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    if (cont.isActive) cont.resume(response) else response.close()
+                }
+            })
+        }
 
     private data class AttemptOutcome(val result: ChatReplyResult, val retryable: Boolean)
 
@@ -167,14 +206,14 @@ object PollinationsClient {
     }
 
     /** One OpenAI-compatible chat-completions call to the Classic API. */
-    private fun attemptChat(
+    private suspend fun attemptChat(
         systemInstruction: String,
         history: List<ChatTurn>
     ): AttemptOutcome {
         val request = buildChatRequest(systemInstruction, history, stream = false)
 
         try {
-            httpClient.newCall(request).execute().use { response ->
+            executeCancellable(request).use { response ->
                 if (!response.isSuccessful) {
                     val code = response.code
                     val errorBody = response.body?.string() ?: ""
@@ -207,6 +246,8 @@ object PollinationsClient {
                     AttemptOutcome(ChatReplyResult.Error("The model returned an empty reply."), false)
                 }
             }
+        } catch (e: CancellationException) {
+            throw e // a timeout / session stop must cancel, never retry
         } catch (e: IOException) {
             return AttemptOutcome(
                 ChatReplyResult.Error(
@@ -224,7 +265,7 @@ object PollinationsClient {
     }
 
     /** One streamed (SSE) chat-completions call to the Classic API. */
-    private fun attemptChatStream(
+    private suspend fun attemptChatStream(
         systemInstruction: String,
         history: List<ChatTurn>,
         onToken: (String) -> Unit
@@ -232,7 +273,7 @@ object PollinationsClient {
         val request = buildChatRequest(systemInstruction, history, stream = true)
         var streamedText = ""
         try {
-            httpClient.newCall(request).execute().use { response ->
+            executeCancellable(request).use { response ->
                 if (!response.isSuccessful) {
                     val code = response.code
                     val errorBody = response.body?.string() ?: ""
@@ -259,6 +300,9 @@ object PollinationsClient {
                 var sawSseData = false
                 body.byteStream().bufferedReader().useLines { lines ->
                     for (line in lines) {
+                        // V19: a slow-drip stream must still die on the
+                        // voice deadline — check cancellation per line.
+                        ensureActive()
                         val data = line.trim()
                         if (!data.startsWith("data:")) {
                             // Not an SSE line: keep it in case the server
@@ -306,6 +350,8 @@ object PollinationsClient {
                     AttemptOutcome(ChatReplyResult.Error("The model returned an empty reply."), false)
                 }
             }
+        } catch (e: CancellationException) {
+            throw e // a timeout / session stop must cancel, never retry
         } catch (e: IOException) {
             // Mid-stream drop after text already arrived: keep the
             // partial reply instead of showing an error.

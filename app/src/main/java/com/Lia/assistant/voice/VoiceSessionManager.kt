@@ -31,6 +31,7 @@ import com.Lia.assistant.data.VoiceOutputEngine
 import com.Lia.assistant.data.VoiceOutputPreferences
 import com.Lia.assistant.data.Personality
 import com.Lia.assistant.data.PersonalityRepository
+import com.Lia.assistant.data.PocketTtsVoicePreferences
 import com.Lia.assistant.forge.ForgeController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -68,11 +69,34 @@ object VoiceSessionManager {
      * It is armed when listening ends (onEndOfSpeech) and disarmed the
      * moment a reply starts speaking, a new listening round starts, or
      * the session stops.
+     *
+     * V19: the watchdog no longer recovers silently — it SPEAKS a
+     * short error (system TTS) and restarts listening, so the user
+     * always hears that something went wrong instead of watching a
+     * stuck "Soch rahi hun…".
      */
     private const val THINKING_WATCHDOG_MS = 25_000L
 
-    /** V15: deadline for one voice round-trip (see handleNoKeyTranscript). */
-    private const val VOICE_REPLY_TIMEOUT_MS = 20_000L
+    /**
+     * V19 — hard deadlines for one voice round-trip (task B). Every
+     * step has a real wall-clock bound now:
+     * - STT (listening): 15s — a recognizer that never calls back is
+     *   wedged; the listening watchdog recovers it (see below).
+     * - Chat: 30s — real since V19 because PollinationsClient's calls
+     *   are cancellable (enqueue + call.cancel()); the V15 20s
+     *   `withTimeoutOrNull` around a BLOCKING OkHttp execute() could
+     *   never fire mid-request (worst case was ~9 minutes).
+     * - Online TTS synthesis: 20s (enforced inside OnlineTtsEngine).
+     * - Pocket TTS speak: 30s (watchdog in speakPocketNoKey).
+     * - Live connect: 30s (connect watchdog below).
+     */
+    private const val VOICE_REPLY_TIMEOUT_MS = 30_000L
+    private const val STT_LISTEN_TIMEOUT_MS = 15_000L
+    private const val POCKET_SPEAK_TIMEOUT_MS = 30_000L
+    private const val LIVE_CONNECT_TIMEOUT_MS = 30_000L
+
+    /** V19: give up listening after this many consecutive STT failures. */
+    private const val MAX_STT_FAILURES = 3
 
     /** V15: short retry waits for voice (text chat uses 2s/5s/10s). */
     private val VOICE_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L)
@@ -80,12 +104,13 @@ object VoiceSessionManager {
     private val thinkingWatchdogRunnable = Runnable {
         if (!_isActive.value || !noKeyMode) return@Runnable
         if (_state.value != NovaOrbState.THINKING) return@Runnable
-        // Still thinking after 25s — the turn died somewhere. Say so
-        // plainly and go back to listening instead of hanging forever.
+        // Still thinking after 25s — the turn died somewhere. SPEAK
+        // the failure (never silent) and listen again.
         Log.w(TAG, "Thinking watchdog fired — voice turn never completed")
-        _statusText.value = "Zyada der ho gayi — dobara bolo."
-        _state.value = NovaOrbState.LISTENING
-        startNoKeyListening()
+        disarmThinkingWatchdog()
+        speakErrorAloud("Sorry jan, thoda time lag raha hai — dobara bolo.") {
+            startNoKeyListening()
+        }
     }
 
     private fun armThinkingWatchdog() {
@@ -95,6 +120,104 @@ object VoiceSessionManager {
 
     private fun disarmThinkingWatchdog() {
         mainHandler.removeCallbacks(thinkingWatchdogRunnable)
+    }
+
+    /**
+     * V19 (S2 fix) — the LISTENING watchdog. The recognizer can wedge
+     * after startListening with NO callback at all (known on some
+     * ROMs, Infinix XOS included): no onEndOfSpeech, no onResults, no
+     * onError — the overlay sat on "Sun rahi hun…" forever. This
+     * Handler-based watchdog is armed when a listening round starts
+     * and disarmed the moment speech is detected, a result arrives,
+     * an error fires, or the session stops. On fire it counts as an
+     * STT failure (see onSttFailure): the recognizer is destroyed and
+     * a fresh round starts, with a spoken error; three consecutive
+     * failures end the session with a spoken explanation instead of
+     * looping forever.
+     */
+    private val listeningWatchdogRunnable = Runnable {
+        if (!_isActive.value || !noKeyMode) return@Runnable
+        if (!noKeyListening || _state.value != NovaOrbState.LISTENING) return@Runnable
+        Log.w(TAG, "Listening watchdog fired — recognizer never called back")
+        disarmListeningWatchdog()
+        onSttFailure()
+    }
+
+    private fun armListeningWatchdog() {
+        mainHandler.removeCallbacks(listeningWatchdogRunnable)
+        mainHandler.postDelayed(listeningWatchdogRunnable, STT_LISTEN_TIMEOUT_MS)
+    }
+
+    private fun disarmListeningWatchdog() {
+        mainHandler.removeCallbacks(listeningWatchdogRunnable)
+    }
+
+    /**
+     * V19 (S6 fix) — the LIVE connect watchdog. connectSession can sit
+     * on "Connecting..." forever when onSetupComplete never fires and
+     * no error arrives. Armed on connect, disarmed on setup complete,
+     * error, close, or stop. On fire it disconnects, shows the
+     * slow-network error, SPEAKS it, and lets the normal reconnect
+     * policy decide what happens next.
+     */
+    private val connectWatchdogRunnable = Runnable {
+        if (!_isActive.value || noKeyMode) return@Runnable
+        if (_state.value != NovaOrbState.CONNECTING) return@Runnable
+        Log.w(TAG, "Live connect watchdog fired — setup never completed")
+        disarmConnectWatchdog()
+        client?.disconnect()
+        _state.value = NovaOrbState.ERROR
+        _statusText.value = "Net bohat slow hai, voice connect nahi ho rahi. " +
+            "Text chat mein likh lo — wahan se bhi baat ho jayegi."
+        _lastError.value = "Live connect timed out"
+        speakErrorAloud(_statusText.value) {
+            scheduleReconnect()
+        }
+    }
+
+    private fun armConnectWatchdog() {
+        mainHandler.removeCallbacks(connectWatchdogRunnable)
+        mainHandler.postDelayed(connectWatchdogRunnable, LIVE_CONNECT_TIMEOUT_MS)
+    }
+
+    private fun disarmConnectWatchdog() {
+        mainHandler.removeCallbacks(connectWatchdogRunnable)
+    }
+
+    /** V19: consecutive STT failures (watchdog / network / start errors). */
+    private var sttFailureStrikes = 0
+
+    /**
+     * V19 — one STT failure (listening watchdog, recognizer network /
+     * server error, or startListening throwing). Never silent: the
+     * user hears a short error and listening restarts. After
+     * [MAX_STT_FAILURES] consecutive failures the session stops
+     * trying — the overlay goes to ERROR with a spoken explanation
+     * and a "Dobara try karo" button (see VoiceScreen), instead of
+     * looping spoken errors forever. Quiet-room errors (no match /
+     * speech timeout) are NOT failures and never come here.
+     */
+    private fun onSttFailure() {
+        if (!_isActive.value || !noKeyMode) return
+        sttFailureStrikes++
+        stopNoKeyListening()
+        if (sttFailureStrikes >= MAX_STT_FAILURES) {
+            disarmListeningWatchdog()
+            disarmThinkingWatchdog()
+            _state.value = NovaOrbState.ERROR
+            setTurnState(VoiceTurnState.ERROR)
+            _statusText.value = "Microphone se awaz nahi aa rahi — voice band kar rahi hun. " +
+                "Dobara try karo, ya text chat use karo."
+            _lastError.value = "Speech recognition failed repeatedly"
+            speakErrorAloud(_statusText.value) {
+                _state.value = NovaOrbState.ERROR
+                setTurnState(VoiceTurnState.ERROR)
+            }
+            return
+        }
+        speakErrorAloud("Sorry jan, awaz nahi aa rahi, dobara bolo.") {
+            startNoKeyListening()
+        }
     }
 
     // V15: a fact the auto-rules proposed in voice, waiting for a
@@ -152,8 +275,9 @@ object VoiceSessionManager {
     private var appContext: Context? = null
 
     // V12 no-key voice mode: Android SpeechRecognizer for input,
-    // Pollinations chat for the brain, system TextToSpeech (cute voice)
-    // for output. No key, no network service for the voice itself.
+    // Pollinations chat for the brain, and the V19 voice chain
+    // (POCKET → ONLINE → SYSTEM) for output. No key, no network
+    // service for the voice itself.
     private var noKeyMode = false
     private var speechRecognizer: SpeechRecognizer? = null
     private var noKeyTts: TextToSpeech? = null
@@ -163,6 +287,33 @@ object VoiceSessionManager {
     private var noKeySpeaking = false
     private var noKeyRestartJob: Job? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // V19: the cached on-device voice (Pocket TTS). Created once per
+    // session (loading ~191 MB of ONNX models is expensive) and
+    // released in stop(); recreated when the user changes voice in
+    // Settings. Null when the model is not downloaded.
+    private var pocketTts: PocketTtsEngine? = null
+    private var pocketTtsVoiceId: String? = null
+
+    // V19: streaming reply state — sentences spoken as they arrive.
+    // The pump speaks queued sentences one at a time through the
+    // normal voice chain; `streamDone` is set when the chat stream
+    // ends (or times out) and the queue drains.
+    private val streamQueue = ArrayDeque<String>()
+    private var streamSpeaking = false
+    private var streamDone = false
+    private var streamSpokenAny = false
+    private var streamEnqueuedSentences = 0
+    private var streamFullText = ""
+
+    private fun resetStreamState() {
+        streamQueue.clear()
+        streamSpeaking = false
+        streamDone = false
+        streamSpokenAny = false
+        streamEnqueuedSentences = 0
+        streamFullText = ""
+    }
 
     private var reconnectJob: Job? = null
     private var silenceWatchdogJob: Job? = null
@@ -228,6 +379,134 @@ object VoiceSessionManager {
         )
     }
 
+    /**
+     * V19 (S9 fix) — guarantee a working system TTS, creating (or
+     * re-creating) it when needed. The old code created noKeyTts once
+     * in startNoKeyMode and, if its init failed, every later reply
+     * silently showed as text with no retry and no notice. Now any
+     * path that needs to SPEAK an error (or a reply) goes through
+     * here: a dead instance is dropped and a fresh one is built, with
+     * a 3s init watchdog — [onReady] fires exactly once, with the TTS
+     * or null. In Live mode (noKeyTts is null there) this lazily
+     * creates the TTS the spoken error needs; stop() shuts it down.
+     */
+    private fun ensureSystemTts(onReady: (TextToSpeech?) -> Unit) {
+        val existing = noKeyTts
+        if (existing != null && noKeyTtsReady) {
+            onReady(existing)
+            return
+        }
+        if (existing != null) {
+            runCatching { existing.shutdown() }
+            noKeyTts = null
+            noKeyTtsReady = false
+        }
+        val ctx = appContext ?: run { onReady(null); return }
+        var done = false
+        val finish = { tts: TextToSpeech? ->
+            if (!done) {
+                done = true
+                onReady(tts)
+            }
+        }
+        val timeout = Runnable { finish(null) }
+        mainHandler.postDelayed(timeout, 3_000L)
+        noKeyTts = TextToSpeech(ctx) { status ->
+            mainHandler.removeCallbacks(timeout)
+            if (status == TextToSpeech.SUCCESS) {
+                noKeyTtsReady = true
+                noKeyTts?.let {
+                    CuteVoice.applyCuteVoice(
+                        it,
+                        DeviceTtsVoicePreferences.getVoiceName(ctx)
+                    )
+                }
+                finish(noKeyTts)
+            } else {
+                noKeyTtsReady = false
+                finish(null)
+            }
+        }
+    }
+
+    /**
+     * V19 — SPEAK a short error out loud, on ANY failure, via system
+     * TTS directly. This deliberately bypasses the voice chain (the
+     * chain is what failed) so an error can never die inside the
+     * engine it is reporting. [then] runs exactly once: after the
+     * error finishes speaking, or at once when no TTS can be had
+     * (the error is still shown as status text). A 10s watchdog
+     * guarantees `then` even if the TTS callbacks never fire. While
+     * the error speaks the recognizer stays off, exactly like a
+     * normal reply.
+     */
+    private fun speakErrorAloud(text: String, then: (() -> Unit)? = null) {
+        if (!_isActive.value) {
+            then?.invoke()
+            return
+        }
+        disarmThinkingWatchdog()
+        disarmListeningWatchdog()
+        _statusText.value = text
+        _state.value = NovaOrbState.SPEAKING
+        setTurnState(VoiceTurnState.SPEAKING)
+        noKeySpeaking = true
+        var done = false
+        val finish = {
+            if (!done) {
+                done = true
+                noKeySpeaking = false
+                _amplitude.value = 0f
+                then?.invoke()
+            }
+        }
+        val watchdog = Runnable { finish() }
+        mainHandler.postDelayed(watchdog, 10_000L)
+        ensureSystemTts { tts ->
+            if (tts == null) {
+                // No voice at all: the text is already on screen.
+                mainHandler.removeCallbacks(watchdog)
+                finish()
+                return@ensureSystemTts
+            }
+            tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {}
+                override fun onDone(utteranceId: String?) {
+                    mainHandler.removeCallbacks(watchdog)
+                    finish()
+                }
+
+                override fun onError(utteranceId: String?) {
+                    mainHandler.removeCallbacks(watchdog)
+                    finish()
+                }
+            })
+            if (tts.speak(
+                    text,
+                    TextToSpeech.QUEUE_FLUSH,
+                    null,
+                    "lia-error-${System.currentTimeMillis()}"
+                ) == TextToSpeech.ERROR
+            ) {
+                mainHandler.removeCallbacks(watchdog)
+                finish()
+            }
+        }
+    }
+
+    /**
+     * V19 (S8 fix) — retry after an ERROR state (the VoiceScreen
+     * "Dobara try karo" button). Resets the failure count and starts
+     * a fresh listening round; the session itself never stopped, so
+     * no re-connect is needed.
+     */
+    fun retryListening() {
+        if (!_isActive.value || !noKeyMode) return
+        sttFailureStrikes = 0
+        _lastError.value = null
+        startNoKeyListening()
+    }
+
     fun start(context: Context) {
         if (_isActive.value) return
         appContext = context.applicationContext
@@ -276,8 +555,11 @@ object VoiceSessionManager {
     //
     // How it works: the recognizer listens for one utterance, the
     // transcript goes to Pollinations chat (same GF instruction as text
-    // chat), and the reply is spoken with the system TTS cute voice.
-    // Then listening restarts automatically — tap-to-talk, no wake word.
+    // chat, streamed — the first sentence speaks as it arrives), and
+    // the reply is spoken through the V19 voice chain (Pocket on-device
+    // voice first when downloaded, then the online Kokoro voice, then
+    // system TTS). Then listening restarts automatically — tap-to-talk,
+    // no wake word.
     // Device commands from the transcript still run locally, exactly
     // like the Live path (same parser, same 20s double-run guard).
     //
@@ -330,6 +612,7 @@ object VoiceSessionManager {
         // A new listening round means the previous turn ended one way
         // or another — the watchdog's job is done.
         disarmThinkingWatchdog()
+        disarmListeningWatchdog()
         if (!_isActive.value || !noKeyMode || _muted.value || noKeySpeaking) return
         mainHandler.post {
             if (!_isActive.value || !noKeyMode || _muted.value || noKeySpeaking) return@post
@@ -360,9 +643,17 @@ object VoiceSessionManager {
                 _state.value = NovaOrbState.LISTENING
                 _statusText.value = "Boliye, main sun rahi hun…"
                 recognizer.startListening(intent)
+                // V19 (S2): a recognizer that never calls back wedges
+                // the overlay — the watchdog catches it at 15s.
+                armListeningWatchdog()
             } catch (e: Exception) {
+                // V19 (S4 fix): the old code swallowed this silently
+                // (noKeyListening=false, no retry, no error). A
+                // startListening throw is now an STT failure: spoken
+                // error + fresh round, three strikes and it stops.
                 Log.w(TAG, "No-key listening failed", e)
                 noKeyListening = false
+                onSttFailure()
             }
         }
     }
@@ -370,6 +661,7 @@ object VoiceSessionManager {
     private fun stopNoKeyListening() {
         noKeyRestartJob?.cancel()
         noKeyRestartJob = null
+        disarmListeningWatchdog()
         if (!noKeyListening) return
         noKeyListening = false
         try {
@@ -396,6 +688,10 @@ object VoiceSessionManager {
         }
 
         override fun onBeginningOfSpeech() {
+            // Speech arrived — the recognizer is alive: the listening
+            // watchdog's job is done, and the failure count resets.
+            disarmListeningWatchdog()
+            sttFailureStrikes = 0
             _state.value = NovaOrbState.LISTENING
             _statusText.value = "Sun rahi hun…"
             setTurnState(VoiceTurnState.SPEECH_DETECTED)
@@ -408,6 +704,7 @@ object VoiceSessionManager {
         override fun onBufferReceived(buffer: ByteArray?) {}
 
         override fun onEndOfSpeech() {
+            disarmListeningWatchdog()
             noKeyListening = false
             _state.value = NovaOrbState.THINKING
             _statusText.value = "Soch rahi hun…"
@@ -420,6 +717,7 @@ object VoiceSessionManager {
         }
 
         override fun onError(error: Int) {
+            disarmListeningWatchdog()
             noKeyListening = false
             _amplitude.value = 0f
             if (!_isActive.value || !noKeyMode || _muted.value) return
@@ -433,17 +731,26 @@ object VoiceSessionManager {
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
                     // Quiet room — listen again after a short pause.
+                    // Not a failure: no error is spoken for silence.
                     setTurnState(VoiceTurnState.IDLE)
                     scheduleNoKeyRestart(1_500L)
                 }
                 else -> {
+                    // V19 (S5 fix): network / server / busy errors used
+                    // to restart listening silently every 800ms, looping
+                    // forever when the recognizer server was unreachable.
+                    // Now they are STT failures: spoken error + restart,
+                    // three strikes and the session stops with a retry
+                    // button instead of looping.
                     setTurnState(VoiceTurnState.IDLE)
-                    scheduleNoKeyRestart(800L)
+                    onSttFailure()
                 }
             }
         }
 
         override fun onResults(results: Bundle?) {
+            disarmListeningWatchdog()
+            sttFailureStrikes = 0
             noKeyListening = false
             _amplitude.value = 0f
             val text = results
@@ -460,6 +767,153 @@ object VoiceSessionManager {
         override fun onPartialResults(partialResults: Bundle?) {}
 
         override fun onEvent(eventType: Int, params: Bundle?) {}
+    }
+
+    /**
+     * V19 — streaming reply: speak the reply sentence by sentence as
+     * the chat stream delivers it, instead of waiting for the whole
+     * answer. This is the same pattern as Maya's speed (first audio
+     * as soon as the first sentence exists — no separate
+     * STT→text→TTS round trips to wait out). The first sentence
+     * typically starts speaking a few seconds into the stream, while
+     * the rest of the reply is still arriving. Sentences queue in
+     * arrival order and speak one at a time through the normal voice
+     * chain (so Pocket/Online/System fallback still applies per
+     * sentence). All stream mutations run on the main thread
+     * (onToken arrives on IO, so it posts here) — the queue is not
+     * thread-safe and the speak callbacks already run on main.
+     */
+    private fun onStreamToken(accumulated: String) {
+        mainHandler.post {
+            if (!_isActive.value || !noKeyMode) return@post
+            // A retry restarts accumulation from zero — drop the stale
+            // queue; sentences already spoken stay spoken (rare, and
+            // never a wedge).
+            if (accumulated.length < streamFullText.length ||
+                !accumulated.startsWith(streamFullText)
+            ) {
+                streamFullText = ""
+                streamEnqueuedSentences = 0
+                streamQueue.clear()
+            }
+            streamFullText = accumulated
+            val sentences = splitSentences(accumulated)
+            // Every sentence except a trailing incomplete one is
+            // speakable now; the tail waits for more text (or the end).
+            val completeCount = if (sentences.isNotEmpty() &&
+                isSentenceComplete(sentences.last())
+            ) sentences.size else (sentences.size - 1).coerceAtLeast(0)
+            for (i in streamEnqueuedSentences until completeCount) {
+                val sentence = sentences[i].trim()
+                if (sentence.isNotBlank()) streamQueue.addLast(sentence)
+            }
+            streamEnqueuedSentences = completeCount
+            pumpStream()
+        }
+    }
+
+    private fun isSentenceComplete(sentence: String): Boolean {
+        val t = sentence.trim()
+        return t.isNotEmpty() && t.last() in ".!?۔\n"
+    }
+
+    /** Split after . ! ? Urdu full stop ۔ or a newline, keeping the terminator. */
+    private fun splitSentences(text: String): List<String> {
+        return text.split(Regex("(?<=[.!?۔\\n])"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+
+    /** Speak queued sentences one at a time; finish when the stream ends. */
+    private fun pumpStream() {
+        if (!_isActive.value || !noKeyMode) return
+        if (streamSpeaking || streamQueue.isEmpty()) {
+            if (streamDone && streamQueue.isEmpty() && !streamSpeaking) {
+                resetStreamState()
+                startNoKeyListening()
+            }
+            return
+        }
+        val sentence = streamQueue.removeFirst()
+        streamSpeaking = true
+        streamSpokenAny = true
+        speakNoKey(sentence) {
+            streamSpeaking = false
+            pumpStream()
+        }
+    }
+
+    /** Enqueue the trailing sentences of the final text (incl. a partial tail). */
+    private fun enqueueStreamRemainder(fullText: String) {
+        val sentences = splitSentences(fullText)
+        for (i in streamEnqueuedSentences until sentences.size) {
+            val sentence = sentences[i].trim()
+            if (sentence.isNotBlank()) streamQueue.addLast(sentence)
+        }
+        streamEnqueuedSentences = sentences.size
+    }
+
+    /** Roman Urdu spoken error for a failed chat turn (never English). */
+    private fun voiceErrorText(error: ChatReplyResult.Error): String {
+        return when {
+            error.isRateLimited ->
+                "Bohat sare log ek saath use kar rahe hain — thoda wait karo, phir try karo."
+            error.isNetworkError ->
+                "Internet nahi lag raha — connection check kar ke dobara bolo."
+            else -> "Kuch garbar ho gayi — dobara try karo."
+        }
+    }
+
+    /**
+     * The chat stream ended (success / error / 30s timeout). If part
+     * of the reply was already spoken, its tail is spoken too and the
+     * turn ends normally — a half reply beats an error. If nothing
+     * was spoken yet, the failure is SPOKEN in Roman Urdu (rate-limit
+     * wording for a 429) and listening restarts. Never silent, never
+     * stuck on "Soch rahi hun…".
+     */
+    private fun finishChatTurn(result: ChatReplyResult?) {
+        when (result) {
+            is ChatReplyResult.Success -> {
+                ConversationMemory.recordTurn(MemoryRole.ASSISTANT, result.text)
+                mainHandler.post {
+                    if (!_isActive.value || !noKeyMode) return@post
+                    enqueueStreamRemainder(result.text)
+                    streamDone = true
+                    pumpStream()
+                }
+            }
+            is ChatReplyResult.Error -> {
+                if (streamSpokenAny) {
+                    mainHandler.post {
+                        if (!_isActive.value || !noKeyMode) return@post
+                        enqueueStreamRemainder(streamFullText)
+                        streamDone = true
+                        pumpStream()
+                    }
+                } else {
+                    val spoken = voiceErrorText(result)
+                    ConversationMemory.recordTurn(MemoryRole.ASSISTANT, spoken)
+                    speakNoKey(spoken) { startNoKeyListening() }
+                }
+            }
+            null -> {
+                // The 30s deadline hit — real now (the call is cancelled).
+                if (streamSpokenAny) {
+                    ConversationMemory.recordTurn(MemoryRole.ASSISTANT, streamFullText)
+                    mainHandler.post {
+                        if (!_isActive.value || !noKeyMode) return@post
+                        enqueueStreamRemainder(streamFullText)
+                        streamDone = true
+                        pumpStream()
+                    }
+                } else {
+                    speakNoKey("Free AI abhi busy hai — dobara try karo.") {
+                        startNoKeyListening()
+                    }
+                }
+            }
+        }
     }
 
     /** One recognised utterance: device command or a Pollinations reply. */
@@ -576,39 +1030,31 @@ object VoiceSessionManager {
                 val history = ConversationMemory.snapshot().map { turn ->
                     ChatTurn(isUser = turn.role == MemoryRole.USER, text = turn.text)
                 }
-                // V18: online only — the offline model was removed in
-                // the diet. Pollinations answers every voice turn.
-                // 20s deadline for the whole round-trip: a hung request
-                // must never wedge the overlay (V14 bug #2).
+                // V19: stream the reply and speak the FIRST sentence as
+                // soon as it arrives (see onStreamToken) — never wait
+                // for the whole answer. The 30s deadline is REAL now:
+                // PollinationsClient's calls are cancellable (enqueue +
+                // call.cancel()), so a hung request dies at 30s instead
+                // of the V15 worst case (~9 minutes behind a blocking
+                // OkHttp execute the timeout could never interrupt).
+                resetStreamState()
                 val result: ChatReplyResult? = withTimeoutOrNull(VOICE_REPLY_TIMEOUT_MS) {
-                    PollinationsClient.chat(
+                    PollinationsClient.chatStream(
                         systemInstruction, history,
+                        onToken = { acc -> onStreamToken(acc) },
                         onRetrying = { attempt ->
                             _statusText.value = "Thoda wait — dobara try kar rahi hun… (koshish $attempt/3)"
                         },
                         retryDelaysMs = VOICE_RETRY_DELAYS_MS
                     )
                 }
-
-                when (val finalResult = result) {
-                    is ChatReplyResult.Success -> {
-                        ConversationMemory.recordTurn(MemoryRole.ASSISTANT, finalResult.text)
-                        speakNoKey(finalResult.text) { startNoKeyListening() }
-                    }
-                    is ChatReplyResult.Error -> {
-                        ConversationMemory.recordTurn(MemoryRole.ASSISTANT, finalResult.message)
-                        speakNoKey(finalResult.message) { startNoKeyListening() }
-                    }
-                    null -> {
-                        // The 20s deadline hit — say so and listen again.
-                        speakNoKey("Free AI abhi busy hai — dobara try karo.") { startNoKeyListening() }
-                    }
-                }
+                finishChatTurn(result)
             } catch (e: Exception) {
                 // V14 bug #1: an uncaught exception here used to kill the
                 // whole scope. Now the turn fails loudly and listening
                 // resumes — the user always gets an answer or an error.
                 Log.w(TAG, "No-key voice turn failed", e)
+                resetStreamState()
                 speakNoKey("Kuch garbar ho gayi — dobara try karo.") { startNoKeyListening() }
             }
         }
@@ -659,11 +1105,103 @@ object VoiceSessionManager {
             return
         }
         when (order[index]) {
+            VoiceOutputEngine.POCKET -> speakPocketNoKey(ctx, text, onDone) {
+                speakVoiceChain(ctx, order, index + 1, text, onDone)
+            }
             VoiceOutputEngine.ONLINE -> speakOnlineNoKey(ctx, text, onDone) {
                 speakVoiceChain(ctx, order, index + 1, text, onDone)
             }
             VoiceOutputEngine.SYSTEM -> speakSystemNoKey(text, onDone)
         }
+    }
+
+    /**
+     * V19 — speak one reply with the on-device Lia voice (Pocket TTS).
+     * The engine is created once per session and cached (loading ~191
+     * MB of ONNX models is expensive); a failed speak drops the cached
+     * engine so the next attempt rebuilds it. A 30s watchdog bounds
+     * native generation: on timeout the engine is stopped and the
+     * chain moves on. When the model is not downloaded, [onFallback]
+     * runs at once — the chain never waits on a missing engine.
+     */
+    private fun speakPocketNoKey(
+        ctx: Context,
+        text: String,
+        onDone: (() -> Unit)? = null,
+        onFallback: () -> Unit
+    ) {
+        if (!PocketTtsEngine.isReady(ctx)) {
+            onFallback()
+            return
+        }
+        noKeySpeaking = true
+        _state.value = NovaOrbState.SPEAKING
+        setTurnState(VoiceTurnState.SPEAKING)
+        _statusText.value = "Lia bol rahi hai…"
+        _amplitude.value = 0.4f
+        scope.launch {
+            val engine = getOrCreatePocketTts(ctx)
+            if (engine == null) {
+                mainHandler.post {
+                    noKeySpeaking = false
+                    _amplitude.value = 0f
+                    onFallback()
+                }
+                return@launch
+            }
+            var done = false
+            val finishOk = {
+                if (!done) {
+                    done = true
+                    noKeySpeaking = false
+                    _amplitude.value = 0f
+                    _state.value = NovaOrbState.LISTENING
+                    setTurnState(VoiceTurnState.LISTENING)
+                    onDone?.invoke()
+                }
+            }
+            val finishFail = {
+                if (!done) {
+                    done = true
+                    Log.w(TAG, "Pocket TTS failed — falling back")
+                    releasePocketTts()
+                    noKeySpeaking = false
+                    _amplitude.value = 0f
+                    onFallback()
+                }
+            }
+            val watchdog = Runnable { finishFail() }
+            mainHandler.postDelayed(watchdog, POCKET_SPEAK_TIMEOUT_MS)
+            engine.speak(
+                text,
+                onDone = {
+                    mainHandler.removeCallbacks(watchdog)
+                    finishOk()
+                },
+                onError = {
+                    mainHandler.removeCallbacks(watchdog)
+                    finishFail()
+                }
+            )
+        }
+    }
+
+    /** The cached Pocket engine for the user's picked voice (lia/loona). */
+    private fun getOrCreatePocketTts(ctx: Context): PocketTtsEngine? {
+        val voiceId = PocketTtsVoicePreferences.getVoiceId(ctx)
+        val cached = pocketTts
+        if (cached != null && pocketTtsVoiceId == voiceId) return cached
+        releasePocketTts()
+        val engine = PocketTtsEngine.create(ctx, voiceId) ?: return null
+        pocketTts = engine
+        pocketTtsVoiceId = voiceId
+        return engine
+    }
+
+    private fun releasePocketTts() {
+        runCatching { pocketTts?.release() }
+        pocketTts = null
+        pocketTtsVoiceId = null
     }
 
     /**
@@ -710,21 +1248,35 @@ object VoiceSessionManager {
      * V15 (voice-bug fix #3): the old code ignored `speak()`'s return
      * value — on ERROR no utterance callback ever fired, `noKeySpeaking`
      * stayed true forever, and listening never restarted. Now an ERROR
-     * return (or a TTS that is not ready yet) shows the reply as status
-     * text so the user can READ it, resets the speaking flag, and goes
-     * straight to [onDone]. A reply is never silently swallowed again —
-     * including one that arrives before TTS init finishes.
+     * return shows the reply as status text so the user can READ it,
+     * resets the speaking flag, and goes straight to [onDone].
+     *
+     * V19 (S9 fix): the old code also used the one TTS instance from
+     * session start and, if its init had failed, silently showed every
+     * later reply as text with no retry and no notice. Now the TTS is
+     * (re-)created on demand via [ensureSystemTts] — a dead init is
+     * retried once — and only a TTS that cannot be created at all
+     * falls back to text.
      */
     private fun speakSystemNoKey(text: String, onDone: (() -> Unit)? = null) {
-        val tts = noKeyTts
-        if (tts == null || !noKeyTtsReady) {
-            // TTS cannot speak: show the reply so it is not lost.
-            _statusText.value = text.take(200)
-            _state.value = NovaOrbState.LISTENING
-            setTurnState(VoiceTurnState.LISTENING)
-            onDone?.invoke()
-            return
+        ensureSystemTts { tts ->
+            if (tts == null) {
+                // TTS cannot speak: show the reply so it is not lost.
+                _statusText.value = text.take(200)
+                _state.value = NovaOrbState.LISTENING
+                setTurnState(VoiceTurnState.LISTENING)
+                onDone?.invoke()
+                return@ensureSystemTts
+            }
+            speakWithSystemTts(tts, text, onDone)
         }
+    }
+
+    private fun speakWithSystemTts(
+        tts: TextToSpeech,
+        text: String,
+        onDone: (() -> Unit)? = null
+    ) {
         noKeySpeaking = true
         _state.value = NovaOrbState.SPEAKING
         setTurnState(VoiceTurnState.SPEAKING)
@@ -817,6 +1369,7 @@ object VoiceSessionManager {
         val liveListener = object : GeminiLiveClient.Listener {
             override fun onSetupComplete() {
                 if (sessionEpoch.get() != currentEpoch) return
+                disarmConnectWatchdog()
                 _state.value = NovaOrbState.LISTENING
                 _statusText.value = "Listening..."
                 VoiceLatencyTracker.resetReconnect()
@@ -960,6 +1513,7 @@ object VoiceSessionManager {
 
             override fun onError(message: String) {
                 if (sessionEpoch.get() != currentEpoch) return
+                disarmConnectWatchdog()
                 _lastError.value = message
                 if (_isActive.value) {
                     scheduleReconnect()
@@ -968,6 +1522,7 @@ object VoiceSessionManager {
 
             override fun onClosed() {
                 if (sessionEpoch.get() != currentEpoch) return
+                disarmConnectWatchdog()
                 if (_isActive.value) {
                     scheduleReconnect()
                 }
@@ -976,6 +1531,9 @@ object VoiceSessionManager {
 
         client = GeminiLiveClient(liveListener)
         client?.connect(apiKey, prompt, voiceName)
+        // V19 (S6): a connect that never completes must not sit on
+        // "Connecting..." forever — the watchdog speaks + reconnects.
+        armConnectWatchdog()
     }
 
     /**
@@ -997,6 +1555,11 @@ object VoiceSessionManager {
             _statusText.value = "Net bohat slow hai, voice connect nahi ho rahi. " +
                 "Text chat mein likh lo — wahan se bhi baat ho jayegi."
             _lastError.value = "Connection lost after ${RECONNECT_DELAYS_MS.size} attempts"
+            // V19 (S6): the final failure is SPOKEN too, not just text.
+            speakErrorAloud(_statusText.value) {
+                _state.value = NovaOrbState.ERROR
+                setTurnState(VoiceTurnState.ERROR)
+            }
             return
         }
 
@@ -1041,6 +1604,13 @@ object VoiceSessionManager {
                     noKeyTts?.stop()
                 } catch (_: Exception) {
                 }
+                // V19 (S10): mute stops every voice, not just system
+                // TTS — the online voice and Pocket kept playing.
+                OnlineTtsEngine.stop()
+                try {
+                    pocketTts?.stop()
+                } catch (_: Exception) {
+                }
             } else if (_isActive.value) {
                 startNoKeyListening()
             }
@@ -1056,11 +1626,20 @@ object VoiceSessionManager {
         silenceWatchdogJob = null
         // V15: the thinking watchdog belongs to this session only.
         disarmThinkingWatchdog()
+        disarmListeningWatchdog()
+        disarmConnectWatchdog()
+        resetStreamState()
+        sttFailureStrikes = 0
         pendingMemoryFact = null
         // V12 no-key cleanup: cancel + destroy the recognizer and stop +
         // shut down TTS, so nothing keeps the mic after the session ends
         // — the same guarantee as the Live path below.
         stopNoKeyListening()
+        // V19 (S10): stop EVERY voice engine, not just system TTS — the
+        // old code never stopped the online voice, so a Kokoro MP3 kept
+        // playing after the session ended. Pocket's model is released.
+        OnlineTtsEngine.stop()
+        releasePocketTts()
         try {
             speechRecognizer?.destroy()
         } catch (_: Exception) {
