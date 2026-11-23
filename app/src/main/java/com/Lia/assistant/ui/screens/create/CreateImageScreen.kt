@@ -4,17 +4,11 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
-import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,13 +20,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.CircularProgressIndicator
@@ -73,14 +64,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/** Image styles offered on the Create Image screen. Sketch is the default,
- * matching the official "Photos into sketches" wording. */
-enum class ImageStyle(val label: String, val instruction: String) {
-    SKETCH("Sketch", "black-and-white pencil sketch style drawing"),
-    CARTOON("Cartoon", "bright colourful cartoon style illustration"),
-    REALISTIC("Realistic", "photorealistic style image")
-}
-
+/**
+ * V20 — Create Image, simplified to the bare minimum: one prompt
+ * field, one big Generate button, the result image, Save / Share.
+ * Removed: the style picker (Sketch / Cartoon / Realistic — the
+ * sketch style is now the fixed default), the photo picker
+ * (restyling a photo needed a Gemini key and was a second,
+ * confusing flow). Text-to-image stays free, no key.
+ */
 @Composable
 fun CreateImageScreen(
     navController: NavController,
@@ -91,10 +82,6 @@ fun CreateImageScreen(
     val scope = rememberCoroutineScope()
 
     var prompt by remember { mutableStateOf("") }
-    var style by remember { mutableStateOf(ImageStyle.SKETCH) }
-    var pickedUri by remember { mutableStateOf<Uri?>(null) }
-    var pickedBytes by remember { mutableStateOf<ByteArray?>(null) }
-    var pickedMimeType by remember { mutableStateOf("image/jpeg") }
     var isGenerating by remember { mutableStateOf(false) }
     var generatedBytes by remember { mutableStateOf<ByteArray?>(null) }
     var generatedMimeType by remember { mutableStateOf("image/png") }
@@ -114,76 +101,31 @@ fun CreateImageScreen(
         }
     }
 
-    // Photo picker — the standard ActivityResultContracts.GetContent route
-    // (same rememberLauncherForActivityResult pattern PermissionsScreen
-    // already uses). No new file-sharing mechanism is invented.
-    val pickPhoto = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch(Dispatchers.IO) {
-            try {
-                val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                withContext(Dispatchers.Main) {
-                    if (bytes != null && bytes.isNotEmpty()) {
-                        pickedUri = uri
-                        pickedBytes = bytes
-                        pickedMimeType = mime
-                        errorMessage = null
-                    } else {
-                        errorMessage = "That photo could not be read. Please pick another one."
-                    }
-                }
-            } catch (_: Exception) {
-                withContext(Dispatchers.Main) {
-                    errorMessage = "That photo could not be read. Please pick another one."
-                }
-            }
-        }
-    }
-
     // V12: Pollinations Flux is the default — free, no key. Gemini is
-    // used only when the user added a key AND picked Gemini in Settings
-    // (it is the only engine that can restyle a picked photo).
+    // used only when the user added a key AND picked Gemini in Settings.
     val useGemini = EnginePreferences.useGemini(context)
-    val pickedBitmap = remember(pickedBytes) {
-        pickedBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
-    }
     val generatedBitmap = remember(generatedBytes) {
         generatedBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
     }
 
     fun generate() {
         val trimmed = prompt.trim()
-        if (trimmed.isEmpty() && pickedBytes == null) {
-            errorMessage = "Please describe the image, or pick a photo to restyle."
-            return
-        }
-        // Pollinations is text-to-image only: restyling a picked photo
-        // needs Gemini. Say so plainly instead of failing silently.
-        if (pickedBytes != null && !useGemini) {
-            errorMessage = "Photo restyle needs Gemini — add a key in Settings and pick the " +
-                "Gemini engine, or describe an image from text (free, no key)."
+        if (trimmed.isEmpty()) {
+            errorMessage = "Pehle describe karo — kaisi image chahiye?"
             return
         }
         isGenerating = true
         errorMessage = null
         statusMessage = null
         scope.launch(Dispatchers.IO) {
-            val fullPrompt = if (pickedBytes != null) {
-                "Turn this photo into a ${style.instruction}. " +
-                    if (trimmed.isNotEmpty()) "Keep the subject and composition, but follow this: $trimmed"
-                    else "Keep the subject and composition of the photo."
-            } else {
-                "Create a ${style.instruction} of: $trimmed"
-            }
+            // V20: sketch is the fixed style (was the default before).
+            val fullPrompt = "Create a black-and-white pencil sketch style drawing of: $trimmed"
             val result = if (useGemini) {
                 GeminiImageClient.generate(
                     apiKey = ApiKeyStore.getKey(context),
                     prompt = fullPrompt,
-                    inputImageBytes = pickedBytes,
-                    inputMimeType = pickedMimeType
+                    inputImageBytes = null,
+                    inputMimeType = null
                 )
             } else {
                 PollinationsClient.generateImage(prompt = fullPrompt)
@@ -228,38 +170,13 @@ fun CreateImageScreen(
             )
         }
         Text(
-            text = "Photos into sketches",
+            text = "Describe it, Lia draws it — free, no key.",
             fontSize = 14.sp,
             color = colors.textSecondary,
             modifier = Modifier.padding(start = 56.dp)
         )
 
         Spacer(modifier = Modifier.height(20.dp))
-
-        // V12: free engine note — no key is needed for text-to-image.
-        if (!useGemini) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(colors.surfaceGlass)
-                    .padding(16.dp)
-            ) {
-                Text(
-                    text = "Free image — no key needed.",
-                    fontSize = 15.sp,
-                    color = colors.textPrimary
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Powered by Pollinations Flux. For sharper results or photo restyle, " +
-                        "add a Gemini key in Settings and pick the Gemini engine.",
-                    fontSize = 13.sp,
-                    color = colors.textSecondary
-                )
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-        }
 
         // Prompt field
         NovaTextField(
@@ -270,75 +187,12 @@ fun CreateImageScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Style choice
-        Text(
-            text = "STYLE",
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp,
-            color = colors.accent
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ImageStyle.values().forEach { option ->
-                val selected = style == option
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(if (selected) colors.accent else colors.surfaceGlass)
-                        .clickable { style = option }
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = option.label,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (selected) colors.onAccent else colors.textPrimary
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Optional photo to restyle
-        NovaButton(
-            text = if (pickedUri == null) "Pick a photo (optional)" else "Change photo",
-            onClick = { pickPhoto.launch("image/*") },
-            type = NovaButtonType.SECONDARY,
-            icon = Icons.Default.PhotoLibrary
-        )
-        if (pickedUri != null) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Photo picked — it will be turned into a ${style.label.lowercase()} drawing.",
-                fontSize = 13.sp,
-                color = colors.textSecondary
-            )
-        }
-        pickedBitmap?.let { bitmap ->
-            Spacer(modifier = Modifier.height(12.dp))
-            Image(
-                bitmap = bitmap.asImageBitmap(),
-                contentDescription = "Picked photo",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .clip(RoundedCornerShape(20.dp))
-            )
-        }
-
         Spacer(modifier = Modifier.height(20.dp))
 
         NovaButton(
-            text = if (isGenerating) "Creating…" else "Create Image",
+            text = if (isGenerating) "Generating…" else "Generate",
             onClick = { generate() },
             type = NovaButtonType.PRIMARY,
-            icon = Icons.Default.Image,
             enabled = !isGenerating,
             modifier = Modifier.fillMaxWidth()
         )
@@ -488,7 +342,7 @@ private fun saveImageToGallery(context: Context, bytes: ByteArray, mimeType: Str
 }
 
 /** Share via the repo's existing FileProvider (cache-path "shared/" is
- * already declared in file_paths.xml) — same pattern as ResultToolbar. */
+ * already declared in file_paths.xml). */
 private fun shareImage(context: Context, bytes: ByteArray, mimeType: String): Boolean {
     return try {
         val dir = File(context.cacheDir, "shared").apply { mkdirs() }
