@@ -51,6 +51,7 @@ import com.Lia.assistant.ui.screens.privacy.PrivacyScreen
 import com.Lia.assistant.ui.screens.profile.ProfileScreen
 import com.Lia.assistant.ui.screens.quickactions.QuickActionsScreen
 import com.Lia.assistant.ui.screens.settings.MemoryScreen
+import com.Lia.assistant.ui.screens.settings.OnDeviceVoiceScreen
 import com.Lia.assistant.ui.screens.settings.SettingsScreen
 import com.Lia.assistant.ui.screens.voice.VoiceScreen
 import com.Lia.assistant.ui.screens.write.WriteScreen
@@ -152,7 +153,9 @@ fun NovaApp(appState: NovaAppState) {
                     composable("voice_keyboard") { VoiceKeyboardSettingsScreen(navController) }
                     // V15: long-term memory screen. (V18: the offline
                     // model manager + on-device voice screens were
-                    // removed with the engines they served.)
+                    // removed with the engines they served. V19: the
+                    // on-device voice screen is back — Pocket TTS only.)
+                    composable("on_device_voice") { OnDeviceVoiceScreen(navController) }
                     composable("memory") { MemoryScreen(navController) }
                     // V16: setup wizard, voice picker + enrolment, skills,
                     // actions, sub-agents, backup, crash reports.

@@ -42,7 +42,11 @@ object NovaPreferences {
         // V18 diet: the per-engine opt-in keys (Pocket TTS voice,
         // on-device STT, VAD gate, laugh detection, speaker verify,
         // memory embeddings) were removed with the engines they served.
+        // V19: Pocket TTS is back — its voice key and the V19
+        // migration flag return; the other engines stay out.
         const val VOICE_OUTPUT_ENGINE = "v17_voice_output_engine"
+        const val POCKET_TTS_VOICE = "v17_pocket_tts_voice"
+        const val VOICE_V19_MIGRATED = "v19_voice_migrated"
         // V17 (online voice) — internet TTS via mesmer.tools (Kokoro,
         // free, no key): voice choice + quality, the one-time
         // migration to the online default, and the local 20/hour
@@ -54,6 +58,8 @@ object NovaPreferences {
         const val ONLINE_VOICE_MIGRATED = "v17_online_voice_migrated"
         const val ONLINE_TTS_QUOTA_WINDOW_START = "v17_online_tts_quota_window_start"
         const val ONLINE_TTS_QUOTA_COUNT = "v17_online_tts_quota_count"
+        // V19: spoken first-run welcome — played once, ever.
+        const val WELCOME_SPOKEN = "v19_welcome_spoken"
     }
 
     private fun getPrefs(context: Context): SharedPreferences {

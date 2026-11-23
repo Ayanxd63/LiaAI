@@ -99,6 +99,7 @@ import com.Lia.assistant.voice.AlwaysListeningWatchdogWorker
 import com.Lia.assistant.data.VoiceOutputEngine
 import com.Lia.assistant.data.VoiceOutputPreferences
 import com.Lia.assistant.voice.OnlineTtsEngine
+import com.Lia.assistant.voice.PocketTtsEngine
 import com.Lia.assistant.voice.VoiceForegroundService
 import com.Lia.assistant.voice.WakeWordModelManager
 import com.Lia.assistant.voice.WeatherClient
@@ -130,13 +131,17 @@ fun SettingsScreen(
     var memoryFactCount by remember { mutableStateOf(0) }
     // V18: Lia's voice choice (ONLINE / SYSTEM) + online quota used
     // this hour, refreshed on entry.
+    // V19: POCKET is back — pocketReady tracks whether the ~191 MB
+    // model is downloaded (cached SHA check, on IO).
     var voiceEngine by remember { mutableStateOf(VoiceOutputPreferences.getEngine(context)) }
     var showVoiceDialog by remember { mutableStateOf(false) }
     var onlineQuotaUsed by remember { mutableStateOf(0) }
+    var pocketReady by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
             memoryFactCount = FactMemoryStore.loadFacts(context).size
             onlineQuotaUsed = OnlineTtsEngine.quotaUsed(context)
+            pocketReady = PocketTtsEngine.isReady(context)
         }
     }
 
@@ -368,9 +373,16 @@ fun SettingsScreen(
                 // V18: Lia's voice — ONLINE (Kokoro, human-like, ~20/hour)
                 // or SYSTEM (device TTS). The on-device Pocket TTS voice
                 // was removed in the V18 diet; ONLINE stays the default.
+                // V19: POCKET is back and is the default when downloaded.
                 NovaSettingsRow(
                     title = "Lia's voice",
                     subtitle = when (voiceEngine) {
+                        VoiceOutputEngine.POCKET ->
+                            if (pocketReady) {
+                                "On-device Lia voice — bina internet, tez awaz"
+                            } else {
+                                "On-device Lia voice — model download nahi hua (neeche se karo)"
+                            }
                         VoiceOutputEngine.ONLINE ->
                             "Internet voice (Kokoro) — insano jaisi awaz · " +
                                 "$onlineQuotaUsed/20 is ghantay mein"
@@ -379,6 +391,17 @@ fun SettingsScreen(
                     },
                     icon = Icons.Default.RecordVoiceOver,
                     onClick = { showVoiceDialog = true }
+                )
+                // V19: Pocket TTS model download + Lia/Loona picker.
+                NovaSettingsRow(
+                    title = "On-device voice",
+                    subtitle = if (pocketReady) {
+                        "Lia voice downloaded — ready (~191 MB)"
+                    } else {
+                        "Lia voice download karo — Wi-Fi, ~191 MB, ek dafa"
+                    },
+                    icon = Icons.Default.RecordVoiceOver,
+                    onClick = { navController.navigate("on_device_voice") }
                 )
                 // V16 (P1-12): human-paced typing — replies type out word
                 // by word at a human pace (90ms/word) instead of streaming
@@ -872,9 +895,9 @@ fun SettingsScreen(
         )
     }
 
-    // V18: Lia's voice picker — ONLINE (Kokoro) / SYSTEM (device TTS).
-    // ONLINE is the default; a quota-exhausted or offline ONLINE
-    // reply falls back to SYSTEM automatically.
+    // V19: Lia's voice picker — POCKET (on-device, default when
+    // downloaded) / ONLINE (Kokoro) / SYSTEM (device TTS). The chain
+    // is POCKET → ONLINE → SYSTEM, so a dead engine falls back at once.
     if (showVoiceDialog) {
         AlertDialog(
             onDismissRequest = { showVoiceDialog = false },
@@ -885,6 +908,39 @@ fun SettingsScreen(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
                         .padding(horizontal = 12.dp, vertical = 10.dp)
+                    // POCKET — on-device Lia voice, fast, no internet.
+                    Row(
+                        modifier = optionModifier.clickable {
+                            VoiceOutputPreferences.setEngine(context, VoiceOutputEngine.POCKET)
+                            voiceEngine = VoiceOutputEngine.POCKET
+                            showVoiceDialog = false
+                        },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "On-device Lia voice (Pocket)",
+                                fontSize = 15.sp,
+                                color = colors.textPrimary
+                            )
+                            Text(
+                                text = if (pocketReady) {
+                                    "Bina internet, tez awaz — downloaded, ready"
+                                } else {
+                                    "Bina internet, tez awaz — pehle On-device voice se download karo"
+                                },
+                                fontSize = 12.sp,
+                                color = colors.textSecondary
+                            )
+                        }
+                        if (voiceEngine == VoiceOutputEngine.POCKET) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = colors.accent
+                            )
+                        }
+                    }
                     // ONLINE — human-like internet voice, ~20/hour.
                     Row(
                         modifier = optionModifier.clickable {
@@ -901,7 +957,7 @@ fun SettingsScreen(
                                 color = colors.textPrimary
                             )
                             Text(
-                                text = "Insano jaisi awaz, bina key · ~20 ghantay mein, phir device voice",
+                                text = "Insano jaisi awaz, bina key · ~20 ghantay mein, phir on-device / device voice",
                                 fontSize = 12.sp,
                                 color = colors.textSecondary
                             )
