@@ -125,6 +125,12 @@ dependencies {
     // the current release on Maven Central.
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     implementation("com.alphacephei:vosk-android:0.3.45")
+    // V21 fix: Vosk's Model() needs JNA's android-aarch64
+    // libjnidispatch.so; the plain JNA jar vosk-android pulls in does
+    // not put it in the minified APK, so the wake-word spotter crashed
+    // with UnsatisfiedLinkError. The JNA AAR ships the native lib
+    // (5.14.0, close to vosk's transitive 5.13.0).
+    implementation("net.java.dev.jna:jna:5.14.0@aar")
 
     // V15: Keystore-backed encrypted credential storage (security-crypto
     // 1.1.0, stable July 2025 — verified on Google Maven 2026-11-22).
