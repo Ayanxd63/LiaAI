@@ -1,6 +1,7 @@
 package com.Lia.assistant.voice
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -302,7 +303,9 @@ object PollinationsClient {
                     for (line in lines) {
                         // V19: a slow-drip stream must still die on the
                         // voice deadline — check cancellation per line.
-                        ensureActive()
+                        // (Bare ensureActive() does not resolve here:
+                        // this is a suspend fun, not a CoroutineScope.)
+                        currentCoroutineContext().ensureActive()
                         val data = line.trim()
                         if (!data.startsWith("data:")) {
                             // Not an SSE line: keep it in case the server
