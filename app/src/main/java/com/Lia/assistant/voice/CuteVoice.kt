@@ -19,8 +19,7 @@ import java.util.Locale
  * female voice, any English voice is used — never a crash, never silence.
  *
  * This does NOT drive lip sync: system TTS exposes no audio buffers,
- * so the home character's mouth stays still while TTS speaks — the same
- * honest limitation the app already documents for ElevenLabs audio.
+ * so the home character's mouth stays still while TTS speaks.
  * Gemini Live (Sulafat) still drives lip sync when a key is present.
  */
 object CuteVoice {
