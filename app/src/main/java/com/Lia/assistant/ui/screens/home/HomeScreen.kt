@@ -82,8 +82,8 @@ import com.Lia.assistant.voice.VoiceSessionManager
  * GF rose theme, the headphones-girl default, and all V18 behaviour
  * (online Kokoro voice, system TTS fallback, Vosk "Hey Lia", Pollinations
  * chat/image). No new permissions, no new dependencies, no manifest
- * changes. CreateWriteQuickActions.kt was deleted — it was Home-only UI
- * and is now unused.
+ * changes. The Home-only quick-actions file was deleted — it was
+ * Home-only UI and is now unused.
  */
 @Composable
 fun HomeScreen(

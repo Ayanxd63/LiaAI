@@ -2,6 +2,8 @@ package com.Lia.assistant.ui.screens.settings
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,13 +28,17 @@ import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Message
@@ -95,6 +101,8 @@ import com.Lia.assistant.data.VoiceOutputPreferences
 import com.Lia.assistant.voice.OnlineTtsEngine
 import com.Lia.assistant.voice.VoiceForegroundService
 import com.Lia.assistant.voice.WakeWordModelManager
+import com.Lia.assistant.voice.WeatherClient
+import com.Lia.assistant.voice.WeatherNow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -206,6 +214,37 @@ fun SettingsScreen(
                         (e.localizedMessage ?: "unknown error")
                 }
             }
+        }
+    }
+
+    // V19: weather moved here from Home (V16 info card). Cached result
+    // first, fresh fetch on tap; location permission is asked only
+    // from this row, never on open.
+    var weather by remember { mutableStateOf<WeatherNow?>(WeatherClient.loadCached(context)) }
+    var weatherNote by remember { mutableStateOf<String?>(null) }
+    val locationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) refreshWeather(context, scope) { result ->
+            result.onSuccess { weather = it; weatherNote = null }
+                .onFailure { weatherNote = "Mausam nahi mila — net check karo" }
+        } else {
+            weatherNote = "Location allow karo to mausam dikhaun"
+        }
+    }
+
+    fun onWeatherRowTap() {
+        if (ContextCompat.checkSelfPermission(
+                context, Manifest.permission.ACCESS_COARSE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            weatherNote = "Location allow karo to mausam dikhaun"
+            locationLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+            return
+        }
+        refreshWeather(context, scope) { result ->
+            result.onSuccess { weather = it; weatherNote = null }
+                .onFailure { weatherNote = "Mausam nahi mila — net check karo" }
         }
     }
 
@@ -624,6 +663,38 @@ fun SettingsScreen(
                     icon = Icons.Default.List,
                     onClick = { navController.navigate("actions") }
                 )
+                // V19: moved here from Home — Create Image / Write /
+                // Prompt Generator and the weather card. Home is now
+                // only the character + mic + ask bar; these live here
+                // so nothing is lost. (Prompt Generator is ALSO still
+                // a chip in Chat.)
+                NovaSettingsRow(
+                    title = "Create Image",
+                    subtitle = "Photos into sketches",
+                    icon = Icons.Default.Image,
+                    onClick = { navController.navigate("create_image") }
+                )
+                NovaSettingsRow(
+                    title = "Write",
+                    subtitle = "Notes, code, content",
+                    icon = Icons.Default.Edit,
+                    onClick = { navController.navigate("write") }
+                )
+                NovaSettingsRow(
+                    title = "Prompt Generator",
+                    subtitle = "Better prompts for chat & images — free",
+                    icon = Icons.Default.Lightbulb,
+                    onClick = { navController.navigate("prompt_generator") }
+                )
+                NovaSettingsRow(
+                    title = "Weather",
+                    subtitle = weather?.let {
+                        "${it.tempC.toInt()}°C — ${it.description}" +
+                            (it.humidity?.let { h -> " · $h% humidity" } ?: "")
+                    } ?: (weatherNote ?: "Tap karo — mausam dekho"),
+                    icon = Icons.Default.Cloud,
+                    onClick = { onWeatherRowTap() }
+                )
                 NovaSettingsRow(
                     title = "Sub-agents",
                     subtitle = "Research, Story, Song list — dated files banate hain",
@@ -958,5 +1029,24 @@ fun SettingsScreen(
             },
             containerColor = colors.surfaceRaised
         )
+    }
+}
+
+/** V19: fetch fresh weather for the last-known location. Never throws. */
+private fun refreshWeather(
+    context: android.content.Context,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onResult: (Result<WeatherNow>) -> Unit
+) {
+    scope.launch(Dispatchers.IO) {
+        val location = WeatherClient.lastKnownLocation(context)
+        if (location == null) {
+            withContext(Dispatchers.Main) {
+                onResult(Result.failure(IllegalStateException("No location")))
+            }
+            return@launch
+        }
+        val result = WeatherClient.fetch(context, location.first, location.second)
+        withContext(Dispatchers.Main) { onResult(result) }
     }
 }
