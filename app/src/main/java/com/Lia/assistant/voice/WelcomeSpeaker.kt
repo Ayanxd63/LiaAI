@@ -30,13 +30,14 @@ import kotlin.coroutines.resume
  * Maya's welcome plays BEFORE any key exists — on the key screen
  * itself, while that screen says without a key she can neither hear
  * nor answer. So the welcome CANNOT be Gemini Live; it must be the
- * on-device voice. Lia's welcome therefore prefers POCKET TTS
- * (on-device) when its voices are downloaded, and falls back through
- * the chain (ONLINE Kokoro → SYSTEM) only when Pocket is not
- * downloaded yet. No Gemini key is ever required for the welcome.
+ * on-device voice. Lia's welcome therefore prefers HINDI TTS
+ * (Supertonic 3, V21 — the native Hindi voice) when its model is
+ * downloaded, then POCKET TTS, and falls back through the chain
+ * (ONLINE Kokoro → SYSTEM) only when neither is downloaded yet. No
+ * Gemini key is ever required for the welcome.
  *
  * Never-stuck rules, same as the voice session: every engine has a
- * hard timeout (Pocket 30s, Online 20s synthesis + 60s overall
+ * hard timeout (Hindi 30s, Pocket 30s, Online 20s synthesis + 60s overall
  * backstop, system TTS 3s init + 15s speak); [onDone] fires exactly
  * once whether the welcome spoke or every engine failed (the text
  * stays visible on the card meanwhile); [stop] ends all speech at
@@ -48,6 +49,7 @@ object WelcomeSpeaker {
 
     private const val TAG = "WelcomeSpeaker"
 
+    private const val HINDI_SPEAK_TIMEOUT_MS = 30_000L
     private const val POCKET_SPEAK_TIMEOUT_MS = 30_000L
     private const val ONLINE_OVERALL_TIMEOUT_MS = 60_000L
     private const val SYSTEM_TTS_INIT_TIMEOUT_MS = 3_000L
@@ -57,6 +59,7 @@ object WelcomeSpeaker {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var speakJob: Job? = null
+    private var hindiTts: HindiTtsEngine? = null
     private var pocketTts: PocketTtsEngine? = null
     private var systemTts: TextToSpeech? = null
 
@@ -97,7 +100,7 @@ object WelcomeSpeaker {
     }
 
     /**
-     * Speak [text] once, Pocket → Online → System, then [onDone].
+     * Speak [text] once, Hindi → Pocket → Online → System, then [onDone].
      * [onDone] fires exactly once on the main thread, whether the
      * welcome spoke or every engine failed. A previous welcome is
      * stopped first.
@@ -108,17 +111,23 @@ object WelcomeSpeaker {
         speakJob = scope.launch {
             val ctx = context.applicationContext
             var ok = false
-            // 1. Pocket TTS first when downloaded (fast, on-device).
-            if (PocketTtsEngine.isReady(ctx)) {
+            // 1. Hindi TTS first when downloaded (V21 — native Hindi
+            // voice; Roman Urdu is transliterated inside the engine).
+            if (HindiTtsEngine.isReady(ctx)) {
+                ok = tryHindi(ctx, text)
+            }
+            // 2. Pocket TTS when Hindi is missing or failed.
+            if (!ok && !stopped && PocketTtsEngine.isReady(ctx)) {
                 ok = tryPocket(ctx, text)
             }
-            // 2. Online Kokoro when Pocket is missing or failed.
+            // 3. Online Kokoro when both on-device voices are missing
+            // or failed.
             if (!ok && !stopped) {
                 ok = withTimeoutOrNull(ONLINE_OVERALL_TIMEOUT_MS) {
                     tryOnline(ctx, text)
                 } ?: false
             }
-            // 3. System TTS — always available, last resort.
+            // 4. System TTS — always available, last resort.
             if (!ok && !stopped) {
                 ok = trySystem(ctx, text)
             }
@@ -133,6 +142,9 @@ object WelcomeSpeaker {
         stopped = true
         speakJob?.cancel()
         speakJob = null
+        runCatching { hindiTts?.stop() }
+        runCatching { hindiTts?.release() }
+        hindiTts = null
         runCatching { pocketTts?.stop() }
         runCatching { pocketTts?.release() }
         pocketTts = null
@@ -140,6 +152,31 @@ object WelcomeSpeaker {
         runCatching { systemTts?.stop() }
         runCatching { systemTts?.shutdown() }
         systemTts = null
+    }
+
+    /**
+     * Hindi TTS, one shot: create the engine (model load), speak,
+     * release. Returns false when the engine cannot start or the
+     * speak fails / times out at 30s. Cancellation (stop) propagates.
+     */
+    private suspend fun tryHindi(ctx: Context, text: String): Boolean {
+        val engine = HindiTtsEngine.create(ctx) ?: return false
+        hindiTts = engine
+        try {
+            return withTimeoutOrNull(HINDI_SPEAK_TIMEOUT_MS) {
+                suspendCancellableCoroutine { cont ->
+                    cont.invokeOnCancellation { engine.stop() }
+                    engine.speak(
+                        text,
+                        onDone = { if (cont.isActive) cont.resume(true) },
+                        onError = { if (cont.isActive) cont.resume(false) }
+                    )
+                }
+            } ?: false
+        } finally {
+            runCatching { engine.release() }
+            if (hindiTts === engine) hindiTts = null
+        }
     }
 
     /**
