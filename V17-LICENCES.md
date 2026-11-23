@@ -1,17 +1,24 @@
-# V18 — Diet: licences & provenance
+# V19 — Licences & provenance (Pocket TTS is back)
 
-V18 removed the two heavy on-device engines that V17 added, to get
-the APK down to 30–40 MB. Everything in this file is what is
-ACTUALLY in the app now. Nothing is copied from Maya (no code,
-prompts, models, `.so` binaries, ogg samples, art, palette, or
-endpoints; no getmaya.online use).
+V19 restores ONE on-device engine from V17 — Pocket TTS only — for
+fast voice (the user: "Fast voice chaye. Replay to Aya he NHI").
+Everything in this file is what is ACTUALLY in the app now. Nothing
+is copied from Maya (no code, prompts, models, `.so` binaries, ogg
+samples, art, palette, or endpoints; no getmaya.online use).
 
-## Removed in V18 (was in V17, now gone)
+## Restored in V19 (Pocket TTS only)
 
-| What | Why it went |
+| What | Licence | Source / version |
+|---|---|---|
+| sherpa-onnx v2.0.3 (runtime only) | Apache-2.0 | GitHub releases `k2-fsa/sherpa-onnx` v2.0.3, SHA-256 checked in CI (see `.github/workflows/android.yml`). CI extracts arm64-v8a + x86_64 `.so` files; the V18 arm64-only filter ships just arm64 (~31.5 MB in the APK). |
+| Pocket TTS int8 model + Lia/Loona voice references | CC-BY-4.0 (Kyutai Pocket TTS, via sherpa-onnx export) | Hugging Face `csukuangfj2/sherpa-onnx-pocket-tts-int8-2026-01-26` — ~191 MB, Wi-Fi-only download on first enable from Settings → On-device voice, SHA-256 verified, never bundled in the APK. Attribution shown in that screen. |
+
+## Still removed (was in V17, stays out in V19)
+
+| What | Why it stays out |
 |---|---|
 | llama.cpp offline LLM (Qwen2.5-0.5B, ~212 MB native libs per ABI) | Offline AI cut for the diet — chat is online-only now (Pollinations / Gemini-with-key). |
-| sherpa-onnx v2.0.3 (Apache-2.0) — Pocket TTS, Moonshine STT, ERes2Net speaker voice-match, Zipformer laugh detection, Silero VAD gate | On-device voice slimmed to Vosk wake word only. The sherpa runtime + ONNX Runtime (~33 MB per ABI) and the ~455 MB of downloadable models are gone. |
+| Moonshine STT, ERes2Net speaker voice-match, Zipformer laugh detection, Silero VAD gate (all sherpa-onnx engines except Pocket TTS) | On-device voice slimmed to Pocket TTS only. Their model descriptors were deleted from VoiceModelManager; nothing in the app can download or reference them. |
 | TensorFlow Lite 2.17.0 (Apache-2.0) — MiniLM-L6-v2 memory embeddings | Embeddings cut with the diet; memory search is keyword/recency only now. |
 
 ## Runtime (still in the app)
@@ -37,19 +44,20 @@ Verified live 2026-11-22: `low` + `af_bella` and `low` + `hf_alpha` (Hindi text)
   accept prohibited-use terms with an HF account); cannot be fetched
   anonymously in-app.
 - **Indus Hindi Pocket TTS** (`Indus-Labs/indus-pocket-tts`, CC-BY-4.0)
-  — no published ONNX export sherpa-onnx can load. (Moot in V18:
-  the on-device voice engine is gone.)
+  — no published ONNX export sherpa-onnx can load. (Still moot in V19:
+  Pocket TTS is back, but the Hindi voice is a future export job.)
 - **Maya's models, sounds, art, prompts, endpoints** — never copied.
 - **YAMNet** — never used; the V17 laugh detector used sherpa
-  AudioTagging instead (also removed in V18).
+  AudioTagging instead (removed in V18, stays out in V19).
 - **MediaPipe LLM Inference** — maintenance-only since mid-2026 (V15
   decision, still stands).
 
 ## Notes
 
-- Pocket TTS had NO Hindi: it spoke English (+ fr/de/pt/it/es) and
-  read Roman Urdu with English pronunciation. (Removed in V18.)
+- Pocket TTS has NO Hindi: it speaks English (+ fr/de/pt/it/es) and
+  reads Roman Urdu with English pronunciation. (Back in V19; the Hindi
+  gap is unchanged.)
 - Moonshine tiny-en was English-only; Urdu/Hindi speech always used
   Android's SpeechRecognizer — and still does.
 - Speaker voice-match was a similarity score, NOT biometric
-  verification. (Removed in V18.)
+  verification. (Removed in V18, stays out in V19.)
