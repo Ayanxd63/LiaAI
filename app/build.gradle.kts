@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-    namespace = "com.Lia.assistant"
+    namespace = "com.goldai.assistant"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.Lia.assistant"
+        applicationId = "com.goldai.assistant"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
@@ -58,6 +58,11 @@ android {
                     storePassword = props.getProperty("storePassword", "")
                     keyAlias = props.getProperty("keyAlias", "")
                     keyPassword = props.getProperty("keyPassword", "")
+                    // Gold AI release keystore is PKCS#12 (generated with
+                    // openssl, see play-store/SIGNING.md). If a JKS keystore
+                    // is ever used instead, set storeType=JKS in
+                    // keystore.properties.
+                    storeType = props.getProperty("storeType", "PKCS12")
                 }
                 signingConfig = releaseSigning
             }
@@ -89,6 +94,9 @@ android {
     }
 
     buildFeatures {
+        // Explicit: AdManager checks BuildConfig.DEBUG to keep ads
+        // off in debug builds.
+        buildConfig = true
         compose = true
     }
 }
@@ -155,6 +163,17 @@ dependencies {
     // voice stack is now Vosk wake word + system SpeechRecognizer /
     // system TTS + the online Kokoro voice (OkHttp, already here) +
     // (V19) Pocket TTS via sherpa-onnx above.
+
+    // V22 monetization: Google Mobile Ads (AdMob) — banner +
+    // interstitial only. Test ad unit IDs only, see
+    // monetization/AdConfig.kt. Ads are OFF in debug builds
+    // (AdManager checks BuildConfig.DEBUG). No other ad/tracking
+    // SDK is added — F-Droid forbids proprietary ad libraries, so
+    // that door stays open. (The Gold Premium subscription and the
+    // rewarded ad were removed on the user's order 2026-11-24 —
+    // ads-only monetization; the in-app-purchase dependency went
+    // with them, so there is no subscription code anywhere now.)
+    implementation("com.google.android.gms:play-services-ads:23.0.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

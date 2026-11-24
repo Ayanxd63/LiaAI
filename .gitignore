@@ -24,3 +24,9 @@ app/src/direct/res/values/license_backend.xml
 # OS files
 .DS_Store
 Thumbs.db
+
+# Gold AI Play Store release signing — NEVER commit these
+play-store/*.keystore
+play-store/*.p12
+play-store/*.pem
+play-store/keystore-credentials.txt

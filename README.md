@@ -1,4 +1,4 @@
-# Lia AI
+# Gold AI
 
 Voice-first Android AI companion powered by **Gemini Live API**.
 
@@ -34,3 +34,8 @@ Voice-first Android AI companion powered by **Gemini Live API**.
 - No API keys in source code
 - No Firebase or Play licensing in `play` flavor
 - Keys stored in local SharedPreferences only
+
+## Credits
+
+- **Developed by Ayan XD**
+- Based on Lia AI by CodeNinjaVik

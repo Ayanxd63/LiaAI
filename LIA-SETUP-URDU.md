@@ -1,10 +1,10 @@
-# Lia AI — Free Setup (Roman Urdu)
+# Gold AI — Free Setup (Roman Urdu)
 
-Ye CodeNinjaVik ki Lia AI hai — public GitHub repo se li gayi hai.
+Ye CodeNinjaVik ki Lia AI hai — public GitHub repo se li gayi hai, ab Gold AI ke naam se.
 README khud kehta hai: clone karo, Android Studio mein kholo, build karo,
 apni Gemini key Settings mein daalo. Koi key code mein nahi hai.
 
-## Lia AI kya hai?
+## Gold AI kya hai?
 - Voice-first Android AI companion, Gemini Live API se real-time awaz mein baat
 - Text chat (Gemini 2.0 Flash), 10 personalities, Hindi / Hinglish / English
 - Website Forge ("ek cafe ki website banao" bolne se website banata hai)
@@ -14,10 +14,10 @@ apni Gemini key Settings mein daalo. Koi key code mein nahi hai.
 ## Phone par APK banane ke 2 tareeqe
 
 ### Tareeqa 1 — GitHub Actions (asan, Maya jaisa)
-1. GitHub par naya repo banao (jaise `LiaAI`).
-2. Is folder ki files upload karo (zip `lia-ai.zip` se).
-3. GitHub repo mein **Actions** tab kholo → **Build Lia AI APK** → **Run workflow**.
-4. Build complete hone par **Artifacts** se `lia-ai-direct-debug-apk` download karo.
+1. GitHub par naya repo banao (jaise `GoldAI`).
+2. Is folder ki files upload karo (zip `gold-ai.zip` se).
+3. GitHub repo mein **Actions** tab kholo → **Build Gold AI APK** → **Run workflow**.
+4. Build complete hone par **Artifacts** se `gold-ai-direct-debug-apk` download karo.
 5. APK phone mein install karo.
 
 ### Tareeqa 2 — Android Studio (PC par)

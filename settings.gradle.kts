@@ -19,7 +19,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "LiaAI"
+rootProject.name = "GoldAI"
 include(":app")
 // V18 diet: the offline LLM module (llama-lib) and the on-device
 // voice engine (sherpa-onnx) were removed — the app is online +

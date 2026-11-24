@@ -1,4 +1,4 @@
-# Proguard rules for Lia AI
+# Proguard rules for Gold AI
 
 # Keep org.json
 -keep class org.json.** { *; }
@@ -29,11 +29,12 @@
 -keep class androidx.webkit.** { *; }
 
 # Keep Compose runtime and model classes
--keep class com.Lia.assistant.data.** { *; }
--keep class com.Lia.assistant.voice.** { *; }
--keep class com.Lia.assistant.forge.** { *; }
--keep class com.Lia.assistant.agent.** { *; }
--keep class com.Lia.assistant.license.** { *; }
+-keep class com.goldai.assistant.data.** { *; }
+-keep class com.goldai.assistant.monetization.** { *; }
+-keep class com.goldai.assistant.voice.** { *; }
+-keep class com.goldai.assistant.forge.** { *; }
+-keep class com.goldai.assistant.agent.** { *; }
+-keep class com.goldai.assistant.license.** { *; }
 
 # Three.js / JS Interface bridges
 -keepclassmembers class * {
