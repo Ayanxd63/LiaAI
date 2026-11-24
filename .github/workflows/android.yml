@@ -94,3 +94,23 @@ jobs:
         with:
           name: gold-ai-play-release-apk
           path: app/build/outputs/apk/play/release/*.apk
+
+      # Public download links for the store files: Aptoide's form takes
+      # a direct .apk URL (it cannot accept a zipped Actions artifact),
+      # and commit_ will need the .aab link. Creates/updates the
+      # gold-ai-v1.0.0 release with both files attached.
+      - name: Publish GitHub Release (AAB + APK)
+        if: github.ref == 'refs/heads/v21-fix-wakeword'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: gold-ai-v1.0.0
+          name: Gold AI v1.0.0
+          body: |
+            Gold AI v1.0.0 — free AI voice companion (English).
+            - AAB: Google Play / Huawei AppGallery / commit_
+            - APK: Amazon Appstore / Samsung Galaxy Store / Aptoide
+          files: |
+            app/build/outputs/bundle/playRelease/*.aab
+            app/build/outputs/apk/play/release/*.apk
+          draft: false
+          prerelease: false
