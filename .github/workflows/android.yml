@@ -8,6 +8,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # The release step creates a GitHub Release — the default
+    # GITHUB_TOKEN is read-only for contents, so grant write here.
+    permissions:
+      contents: write
     # Release signing secrets (optional — the build still succeeds
     # unsigned without them; see play-store/SIGNING.md).
     env:
